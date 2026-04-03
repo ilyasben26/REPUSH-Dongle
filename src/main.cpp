@@ -274,10 +274,11 @@ void setup()
   Serial.println("  puf_req");
   Serial.println("  led_on / led_off");
   Serial.println("  debug_on / debug_off");
-  Serial.println("  challenge <tc> <tt> <bc> <bt> <count>");
+  Serial.println("  challenge <tc> <tt> <bc> <bt> <count> <delay>");
   Serial.println("    tt: top_tune (0-7), bt: bottom_tune (0-7)");
   Serial.println("    tc: top_choice (1-3), bc: bottom_choice (0-2)");
   Serial.println("    count: number of reads (e.g., 100)");
+  Serial.println("    delay: response delay in ms (e.g., 50)");
 }
 
 void loop()
@@ -309,11 +310,11 @@ void loop()
     }
     else if (command_str.startsWith("challenge"))
     {
-      int args[5];
+      int args[6];
       int arg_count = 0;
       int current_pos = command_str.indexOf(' ');
 
-      while (current_pos != -1 && arg_count < 5)
+      while (current_pos != -1 && arg_count < 6)
       {
         int next_pos = command_str.indexOf(' ', current_pos + 1);
         String arg_str = (next_pos == -1) ? command_str.substring(current_pos + 1) : command_str.substring(current_pos + 1, next_pos);
@@ -321,21 +322,21 @@ void loop()
         current_pos = next_pos;
       }
 
-      if (arg_count == 5)
+      if (arg_count >= 5)
       {
         int top_choice = args[0];
         int top_tune = args[1];
         int bottom_choice = args[2];
         int bottom_tune = args[3];
         int count = args[4];
-        int resp_delay_ms = 50; // 50ms, matches python --resp-delay default
+        int resp_delay_ms = (arg_count == 6) ? args[5] : 50;
 
         execute_challenge(top_tune, bottom_tune, top_choice, bottom_choice, count, resp_delay_ms);
       }
       else
       {
         Serial.println("Error: Invalid 'challenge' command format.");
-        Serial.println("Expected: challenge <tc> <tt> <bc> <bt> <count>");
+        Serial.println("Expected: challenge <tc> <tt> <bc> <bt> <count> [delay]");
       }
     }
     else if (command_str.length() > 0)
