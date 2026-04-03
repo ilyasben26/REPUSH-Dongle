@@ -7,6 +7,8 @@ const uint64_t PUF_RESPONSE_MASK = (1ULL << PUF_RESPONSE_BITS) - 1;
 
 int led = LED_BUILTIN;
 
+bool debug_mode = false;
+
 /**
  * @brief Builds an 8-byte payload for the FPGA.
  */
@@ -76,6 +78,13 @@ void send_setup_and_wait(uint8_t command, uint64_t data_value, unsigned long del
 {
   uint8_t payload[8];
   build_payload(command, data_value, payload);
+  if (debug_mode)
+  {
+    Serial.print("[Choice-PUF] Sending command: 0x");
+    Serial.print(command, HEX);
+    Serial.print(", data: 0x");
+    Serial.println(data_value, HEX);
+  }
   send_command(payload);
   delay(delay_ms);
 }
@@ -105,6 +114,12 @@ bool request_puf_response(uint64_t &puf_value, unsigned long req_delay_ms)
  */
 void execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_choice, int count, int resp_delay_ms)
 {
+
+  if (debug_mode)
+  {
+    Serial.println("**************************************************");
+  }
+
   if (top_choice <= bottom_choice)
   {
     Serial.println("Error: top_choice must be greater than bottom_choice.");
@@ -116,22 +131,46 @@ void execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom
 
   // 1. Tune top and bottom
   uint64_t tune_val = ((top_tune & 0x7) << 5) | ((bottom_tune & 0x7) << 2);
+  if (debug_mode)
+  {
+    Serial.print("[Choice-PUF] top_tune=");
+    Serial.print(top_tune);
+    Serial.print(", bottom_tune=");
+    Serial.println(bottom_tune);
+  }
   send_setup_and_wait(0x2, tune_val, setup_delay);
 
   // 2. Set choices
   uint64_t choice_val = ((top_choice & 0x3) << 2) | (bottom_choice & 0x3);
+  if (debug_mode)
+  {
+    Serial.print("[Choice-PUF] top_choice=");
+    Serial.print(top_choice);
+    Serial.print(", bottom_choice=");
+    Serial.println(bottom_choice);
+  }
   send_setup_and_wait(0x3, choice_val, setup_delay);
 
   // 3. Determine and set bottom pattern
   uint32_t bottom_pattern = (bottom_choice % 2 == 0) ? 0xAAAAAAAA : 0x55555555;
   int bottom_in_bit = (bottom_choice % 2 == 0) ? 0 : 1;
   uint64_t bottom_payload_val = ((uint64_t)(bottom_in_bit & 0x1) << 32) | bottom_pattern;
+  if (debug_mode)
+  {
+    Serial.print("[Choice-PUF] bottom_pattern=0x");
+    Serial.println(bottom_pattern, HEX);
+  }
   send_setup_and_wait(0x5, bottom_payload_val, setup_delay);
 
   // 4. Determine and set top pattern
   uint32_t top_pattern = (top_choice % 2 != 0) ? 0xAAAAAAAA : 0x55555555;
   int top_in_bit = (top_choice % 2 != 0) ? 0 : 1;
   uint64_t top_payload_val = ((uint64_t)(top_in_bit & 0x1) << 32) | top_pattern;
+  if (debug_mode)
+  {
+    Serial.print("[Choice-PUF] top_pattern=0x");
+    Serial.println(top_pattern, HEX);
+  }
   send_setup_and_wait(0x4, top_payload_val, setup_delay);
 
   // 5. Query PUF 'count' times
@@ -141,7 +180,7 @@ void execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom
   std::vector<int> bit_ones(PUF_RESPONSE_BITS, 0);
   std::map<uint64_t, int> sequence_counts;
 
-  Serial.println("Collecting PUF responses...");
+  Serial.println("[LR-PUF] Collecting PUF responses...");
   for (int i = 0; i < count; i++)
   {
     uint64_t value;
@@ -158,7 +197,7 @@ void execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom
     }
     else
     {
-      Serial.print("Warning: Timeout on response ");
+      Serial.print("[Choice-PUF] Warning: Timeout on response ");
       Serial.println(i + 1);
     }
   }
@@ -172,9 +211,11 @@ void execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom
       majority_value_bit |= (1ULL << bit);
     }
   }
-  Serial.print("Majority-voted response (bit mode): ");
+  Serial.print("[LR-PUF] Majority-voted response (bit mode): ");
   print_binary(majority_value_bit, PUF_RESPONSE_BITS);
-  Serial.println();
+  Serial.print(" (");
+  Serial.print(majority_value_bit);
+  Serial.println(")");
 
   uint64_t majority_value_seq = 0;
   int max_count = 0;
@@ -189,33 +230,38 @@ void execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom
       }
     }
   }
-  Serial.print("Majority-voted response (sequence mode): ");
+  Serial.print("[LR-PUF] Majority-voted response (sequence mode): ");
   print_binary(majority_value_seq, PUF_RESPONSE_BITS);
-  Serial.println();
+  Serial.print(" (");
+  Serial.print(majority_value_seq);
+  Serial.println(")");
 
-  Serial.println("Per-bit summary (% of ones):");
-  for (int bit = PUF_RESPONSE_BITS - 1; bit >= 0; bit--)
+  if (debug_mode)
   {
-    float ones_pct = (count > 0) ? (bit_ones[bit] * 100.0f) / count : 0;
-    Serial.print("  bit[");
-    if (bit < 10)
-      Serial.print("0");
-    Serial.print(bit);
-    Serial.print("] -> 1: ");
-    Serial.print(ones_pct, 2);
-    Serial.println("%");
+    Serial.println("[LR-PUF] Per-bit summary (% of ones):");
+    for (int bit = PUF_RESPONSE_BITS - 1; bit >= 0; bit--)
+    {
+      float ones_pct = (count > 0) ? (bit_ones[bit] * 100.0f) / count : 0;
+      Serial.print("[LR-PUF]  bit[");
+      if (bit < 10)
+        Serial.print("0");
+      Serial.print(bit);
+      Serial.print("] -> 1: ");
+      Serial.print(ones_pct, 2);
+      Serial.println("%");
+    }
   }
 
   unsigned long challenge_elapsed = millis() - challenge_start;
-  Serial.print("Challenge elapsed time: ");
+  Serial.print("[LR-PUF] Challenge elapsed time: ");
   Serial.print(challenge_elapsed / 1000.0, 3);
   Serial.println(" s");
 }
 
 void setup()
 {
-  Serial.begin(115200);
-  Serial1.begin(115200);
+  Serial.begin(115200);  // Computer <-> Arduino
+  Serial1.begin(115200); // Arduino <-> FPGA
   pinMode(led, OUTPUT);
 
   while (!Serial)
@@ -227,7 +273,8 @@ void setup()
   Serial.println("Commands:");
   Serial.println("  puf_req");
   Serial.println("  led_on / led_off");
-  Serial.println("  challenge <tt> <bt> <tc> <bc> <count>");
+  Serial.println("  debug_on / debug_off");
+  Serial.println("  challenge <tc> <tt> <bc> <bt> <count>");
   Serial.println("    tt: top_tune (0-7), bt: bottom_tune (0-7)");
   Serial.println("    tc: top_choice (1-3), bc: bottom_choice (0-2)");
   Serial.println("    count: number of reads (e.g., 100)");
@@ -250,25 +297,15 @@ void loop()
       digitalWrite(led, LOW);
       Serial.println("LED OFF");
     }
-    else if (command_str.equalsIgnoreCase("puf_req"))
+    else if (command_str.equalsIgnoreCase("debug_on"))
     {
-      Serial.println("Requesting PUF measurement...");
-      uint64_t puf_value;
-      if (request_puf_response(puf_value, 50)) // 50ms delay
-      {
-        Serial.print("PUF Response (HEX): 0x");
-        char hex_buffer[9];
-        sprintf(hex_buffer, "%08lX", (unsigned long)(puf_value & 0xFFFFFFFF));
-        Serial.println(hex_buffer);
-
-        Serial.print("PUF Response (BIN): ");
-        print_binary(puf_value, PUF_RESPONSE_BITS);
-        Serial.println();
-      }
-      else
-      {
-        Serial.println("Error: Timed out waiting for PUF response.");
-      }
+      debug_mode = true;
+      Serial.println("Debug mode ON");
+    }
+    else if (command_str.equalsIgnoreCase("debug_off"))
+    {
+      debug_mode = false;
+      Serial.println("Debug mode OFF");
     }
     else if (command_str.startsWith("challenge"))
     {
@@ -286,10 +323,10 @@ void loop()
 
       if (arg_count == 5)
       {
-        int top_tune = args[0];
-        int bottom_tune = args[1];
-        int top_choice = args[2];
-        int bottom_choice = args[3];
+        int top_choice = args[0];
+        int top_tune = args[1];
+        int bottom_choice = args[2];
+        int bottom_tune = args[3];
         int count = args[4];
         int resp_delay_ms = 50; // 50ms, matches python --resp-delay default
 
@@ -298,7 +335,7 @@ void loop()
       else
       {
         Serial.println("Error: Invalid 'challenge' command format.");
-        Serial.println("Expected: challenge <tt> <bt> <tc> <bc> <count>");
+        Serial.println("Expected: challenge <tc> <tt> <bc> <bt> <count>");
       }
     }
     else if (command_str.length() > 0)

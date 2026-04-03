@@ -1,7 +1,9 @@
 
 ```sh
 # open terminal to send stuff to arduino via UART
-screen /dev/cu.usbmodem1301 9600
+screen /dev/cu.usbmodem1101 115200
 # challenge <tt> <bt> <tc> <bc> <count> [show_summary]
-challenge 0 1 1 0 10
+debug_on
+challenge 1 6 0 7 1
+# (303826966) (303826966)
 ```
