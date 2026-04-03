@@ -11,6 +11,11 @@ struct Challenge
   int bt;
 };
 
+// --- Pre-calculate the maximum possible number of challenges ---
+// (tc, bc) pairs where tc > bc: (1,0), (2,0), (2,1), (3,0), (3,1), (3,2) -> 6 pairs
+// Total combinations = 6 pairs * 8 tt values * 8 bt values = 384
+const int MAX_POSSIBLE_CHALLENGES = 384;
+
 Challenge *valid_challenges = nullptr;
 int num_valid_challenges = 0;
 int capacity = 0;
@@ -19,19 +24,17 @@ bool debug_mode = false;
 
 void find_valid_challenges()
 {
-  Serial.println("[LR-PUF] Finding valid challenges...");
+  Serial.println("[LR-PUF] Finding valid challenges by pre-allocating max size...");
 
   unsigned long start_time = millis();
 
   if (valid_challenges != nullptr)
   {
     delete[] valid_challenges;
-    valid_challenges = nullptr;
   }
 
+  valid_challenges = new Challenge[MAX_POSSIBLE_CHALLENGES];
   num_valid_challenges = 0;
-  capacity = 10;
-  valid_challenges = new Challenge[capacity];
 
   int response_delay = 1;
   const long ALL_ONES_30_BIT = 0x3FFFFFFF;
@@ -50,22 +53,12 @@ void find_valid_challenges()
 
             if (puf_response != ALL_ONES_30_BIT)
             {
-              // If the array is full, double its capacity
-              if (num_valid_challenges >= capacity)
-              {
-                int new_capacity = capacity * 2;
-                Challenge *new_array = new Challenge[new_capacity];
-                for (int i = 0; i < num_valid_challenges; i++)
-                {
-                  new_array[i] = valid_challenges[i];
-                }
-                delete[] valid_challenges;
-                valid_challenges = new_array;
-                capacity = new_capacity;
-              }
 
-              valid_challenges[num_valid_challenges] = {tc, tt, bc, bt};
-              num_valid_challenges++;
+              if (num_valid_challenges < MAX_POSSIBLE_CHALLENGES)
+              {
+                valid_challenges[num_valid_challenges] = {tc, tt, bc, bt};
+                num_valid_challenges++;
+              }
             }
           }
         }
@@ -75,14 +68,15 @@ void find_valid_challenges()
 
   Serial.print("[LR-PUF] Total valid challenges found and stored: ");
   Serial.println(num_valid_challenges);
-  Serial.print("[LR-PUF] Final capacity of valid challenges array: ");
-  Serial.println(capacity);
+  Serial.print("[LR-PUF] Allocated array size: ");
+  Serial.println(MAX_POSSIBLE_CHALLENGES);
 
   unsigned long elapsed_time = millis() - start_time;
   Serial.print("[LR-PUF] Valid challenges lookup time: ");
   Serial.print(elapsed_time / 1000.0, 3);
   Serial.println(" s");
 
+  /*
   for (int i = 0; i < num_valid_challenges; i++)
   {
     Serial.print("Stored challenge ");
@@ -96,6 +90,7 @@ void find_valid_challenges()
     Serial.print(", bt=");
     Serial.println(valid_challenges[i].bt);
   }
+  */
 }
 
 void setup()
