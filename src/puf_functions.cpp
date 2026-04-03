@@ -1,5 +1,22 @@
 #include "puf_functions.h"
 
+struct Challenge
+{
+    int tc;
+    int tt;
+    int bc;
+    int bt;
+};
+
+// --- Pre-calculate the maximum possible number of challenges ---
+// (tc, bc) pairs where tc > bc: (1,0), (2,0), (2,1), (3,0), (3,1), (3,2) -> 6 pairs
+// Total combinations = 6 pairs * 8 tt values * 8 bt values = 384
+const int MAX_POSSIBLE_CHALLENGES = 384;
+
+Challenge *valid_challenges = nullptr;
+int num_valid_challenges = 0;
+int capacity = 0;
+
 const int PUF_RESPONSE_BITS = 30;
 const uint64_t PUF_RESPONSE_MASK = (1ULL << PUF_RESPONSE_BITS) - 1;
 
@@ -196,6 +213,16 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
         }
     }
 
+    if (count == 1)
+    {
+        Serial.println("[LR-PUF] Single response received:");
+        print_binary(sequence_counts.begin()->first, PUF_RESPONSE_BITS);
+        Serial.print(" (");
+        Serial.print(sequence_counts.begin()->first);
+        Serial.println(")");
+        return sequence_counts.begin()->first;
+    }
+
     // --- Process and print results ---
     uint64_t majority_value_bit = 0;
     for (int bit = 0; bit < PUF_RESPONSE_BITS; bit++)
@@ -252,4 +279,78 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
     Serial.println(" s");
 
     return majority_value_bit; // Return the majority-voted response (bit mode)
+}
+
+/***
+ * @brief Finds valid challenges (those that don't return all ones) by testing all combinations and pre-allocating a fixed-size array to store results.
+ */
+void find_valid_challenges()
+{
+    Serial.println("[LR-PUF] Finding valid challenges...");
+
+    unsigned long start_time = millis();
+
+    if (valid_challenges != nullptr)
+    {
+        delete[] valid_challenges;
+    }
+
+    valid_challenges = new Challenge[MAX_POSSIBLE_CHALLENGES];
+    num_valid_challenges = 0;
+
+    int response_delay = 1;
+    const long ALL_ONES_30_BIT = 0x3FFFFFFF;
+
+    for (int tc = 1; tc <= 3; tc++)
+    {
+        for (int tt = 0; tt <= 7; tt++)
+        {
+            for (int bc = 0; bc <= 2; bc++)
+            {
+                if (tc > bc)
+                {
+                    for (int bt = 0; bt <= 7; bt++)
+                    {
+                        long puf_response = execute_challenge(tt, bt, tc, bc, 1, response_delay);
+
+                        if (puf_response != ALL_ONES_30_BIT)
+                        {
+
+                            if (num_valid_challenges < MAX_POSSIBLE_CHALLENGES)
+                            {
+                                valid_challenges[num_valid_challenges] = {tc, tt, bc, bt};
+                                num_valid_challenges++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Serial.print("[LR-PUF] Total valid challenges found and stored: ");
+    Serial.println(num_valid_challenges);
+    Serial.print("[LR-PUF] Allocated array size: ");
+    Serial.println(MAX_POSSIBLE_CHALLENGES);
+
+    unsigned long elapsed_time = millis() - start_time;
+    Serial.print("[LR-PUF] Valid challenges lookup time: ");
+    Serial.print(elapsed_time / 1000.0, 3);
+    Serial.println(" s");
+
+    /*
+    for (int i = 0; i < num_valid_challenges; i++)
+    {
+      Serial.print("Stored challenge ");
+      Serial.print(i);
+      Serial.print(": tc=");
+      Serial.print(valid_challenges[i].tc);
+      Serial.print(", tt=");
+      Serial.print(valid_challenges[i].tt);
+      Serial.print(", bc=");
+      Serial.print(valid_challenges[i].bc);
+      Serial.print(", bt=");
+      Serial.println(valid_challenges[i].bt);
+    }
+    */
 }

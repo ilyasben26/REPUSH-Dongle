@@ -15,5 +15,6 @@ void print_binary(uint64_t value, int bits);
 void send_setup_and_wait(uint8_t command, uint64_t data_value, unsigned long delay_ms);
 bool request_puf_response(uint64_t &puf_value, unsigned long req_delay_ms);
 int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_choice, int count, int resp_delay_ms);
+void find_valid_challenges();
 
 #endif // PUF_FUNCTIONS_H
