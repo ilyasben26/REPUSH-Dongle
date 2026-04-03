@@ -106,7 +106,7 @@ bool request_puf_response(uint64_t &puf_value, unsigned long req_delay_ms)
 /**
  * @brief Executes the PUF challenge sequence.
  */
-void execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_choice, int count, int resp_delay_ms)
+int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_choice, int count, int resp_delay_ms)
 {
 
     if (debug_mode)
@@ -117,7 +117,7 @@ void execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom
     if (top_choice <= bottom_choice)
     {
         Serial.println("Error: top_choice must be greater than bottom_choice.");
-        return;
+        return -1;
     }
 
     unsigned long challenge_start = millis();
@@ -250,4 +250,6 @@ void execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom
     Serial.print("[LR-PUF] Challenge elapsed time: ");
     Serial.print(challenge_elapsed / 1000.0, 3);
     Serial.println(" s");
+
+    return majority_value_bit; // Return the majority-voted response (bit mode)
 }
