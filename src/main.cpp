@@ -21,6 +21,8 @@ void setup()
   Serial.println("  led_on / led_off");
   Serial.println("  debug_on / debug_off");
   Serial.println("  find_valid");
+  Serial.println("  reconfigure");
+  Serial.println("  challenge <int>");
   Serial.println("  challenge choice-puf <tc> <tt> <bc> <bt> <count> <delay>");
   Serial.println("    tt: top_tune (0-7), bt: bottom_tune (0-7)");
   Serial.println("    tc: top_choice (1-3), bc: bottom_choice (0-2)");
@@ -34,6 +36,10 @@ void loop()
   {
     String command_str = Serial.readStringUntil('\n');
     command_str.trim();
+
+    Serial.print("**** Received command: '");
+    Serial.print(command_str);
+    Serial.println("' ****");
 
     if (command_str.equalsIgnoreCase("led_on"))
     {
@@ -59,7 +65,23 @@ void loop()
     {
       find_valid_challenges();
     }
-    else if (command_str.startsWith("challenge"))
+    else if (command_str.startsWith("reconfigure"))
+    {
+      reconfigure(0);
+    }
+    else if (command_str.startsWith("challenge "))
+    {
+      int challenge_num = command_str.substring(10).toInt();
+      if (challenge_num > 0)
+      {
+        challenge_lr_puf(challenge_num, 0);
+      }
+      else
+      {
+        Serial.println("Error: Invalid challenge number.");
+      }
+    }
+    else if (command_str.startsWith("challenge choice-puf "))
     {
       int args[6];
       int arg_count = 0;

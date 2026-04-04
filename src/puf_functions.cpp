@@ -1,6 +1,13 @@
 #include "puf_functions.h"
+#include <array>
+#include <Crypto.h>
+#include <SHA256.h>
 
-struct Challenge
+const uint8_t SEED_PIN = A0;
+
+SHA256 sha256;
+
+struct ChoicePUFChallenge
 {
     int tc;
     int tt;
@@ -8,17 +15,32 @@ struct Challenge
     int bt;
 };
 
+const size_t HASH_SIZE = 32;
+
+struct State
+{
+    unsigned long last_lr_puf_challenge = 0;
+    ChoicePUFChallenge last_choice_puf_challenge;
+    std::array<uint8_t, HASH_SIZE> hash_value = {0};
+    unsigned long last_used_time = 0;
+};
+
+static State current_state;
+
 // --- Pre-calculate the maximum possible number of challenges ---
 // (tc, bc) pairs where tc > bc: (1,0), (2,0), (2,1), (3,0), (3,1), (3,2) -> 6 pairs
 // Total combinations = 6 pairs * 8 tt values * 8 bt values = 384
 const int MAX_POSSIBLE_CHALLENGES = 384;
 
-Challenge *valid_challenges = nullptr;
+ChoicePUFChallenge *valid_challenges = nullptr;
 int num_valid_challenges = 0;
 int capacity = 0;
 
 const int PUF_RESPONSE_BITS = 30;
 const uint64_t PUF_RESPONSE_MASK = (1ULL << PUF_RESPONSE_BITS) - 1;
+
+ChoicePUFChallenge map_in(int challenge, int state_index);
+std::array<uint8_t, 32> map_out(uint64_t puf_response, int state_index, int challenge);
 
 /**
  * @brief Builds an 8-byte payload for the FPGA.
@@ -71,6 +93,9 @@ uint64_t bytes_to_uint64(const uint8_t *bytes)
     return value;
 }
 
+void print_binary(uint64_t value, int bits);
+void print_binary(const uint8_t *data, size_t size);
+
 /**
  * @brief Prints a 64-bit number in binary format.
  */
@@ -79,6 +104,20 @@ void print_binary(uint64_t value, int bits)
     for (int i = bits - 1; i >= 0; i--)
     {
         Serial.print((value >> i) & 1);
+    }
+}
+
+/**
+ * @brief Prints a byte array in binary format.
+ */
+void print_binary(const uint8_t *data, size_t size)
+{
+    for (size_t i = 0; i < size; ++i)
+    {
+        for (int j = 7; j >= 0; --j)
+        {
+            Serial.print((data[i] >> j) & 1);
+        }
     }
 }
 
@@ -121,7 +160,7 @@ bool request_puf_response(uint64_t &puf_value, unsigned long req_delay_ms)
 }
 
 /**
- * @brief Executes the PUF challenge sequence.
+ * @brief Executes the Choice PUF challenge sequence.
  */
 int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_choice, int count, int resp_delay_ms)
 {
@@ -282,6 +321,120 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
 }
 
 /***
+ * @brief Generates a random seed using noise from an unconnected analog pin. Taken from https://rheingoldheavy.com/better-arduino-random-values/
+ * @return A 32-bit random seed value.
+ */
+uint32_t generateRandomSeed()
+{
+    uint8_t seedBitValue = 0;
+    uint8_t seedByteValue = 0;
+    uint32_t seedWordValue = 0;
+
+    for (uint8_t wordShift = 0; wordShift < 4; wordShift++) // 4 bytes in a 32 bit word
+    {
+        for (uint8_t byteShift = 0; byteShift < 8; byteShift++) // 8 bits in a byte
+        {
+            for (uint8_t bitSum = 0; bitSum <= 8; bitSum++) // 8 samples of analog pin
+            {
+                seedBitValue = seedBitValue + (analogRead(SEED_PIN) & 0x01); // Flip the coin eight times, adding the results together
+            }
+            delay(1);                                                             // Delay a single millisecond to allow the pin to fluctuate
+            seedByteValue = seedByteValue | ((seedBitValue & 0x01) << byteShift); // Build a stack of eight flipped coins
+            seedBitValue = 0;                                                     // Clear out the previous coin value
+        }
+        seedWordValue = seedWordValue | (uint32_t)seedByteValue << (8 * wordShift); // Build a stack of four sets of 8 coins (shifting right creates a larger number so cast to 32bit)
+        seedByteValue = 0;                                                          // Clear out the previous stack value
+    }
+    return (seedWordValue);
+}
+
+/**
+ * @brief Reconfigures the state with a new random hash value.
+ * This uses the noise from an unconnected analog pin (A0) to seed the random generator.
+ */
+void reconfigure_state(State &state)
+{
+
+    if (state.last_used_time == 0) // S_0 case: initialize with random hash
+    {
+        Serial.println("[LR-PUF] Initializing state with random hash value...");
+        // Seed the random number generator with noise from an unconnected analog pin.
+        uint32_t rand32 = generateRandomSeed();
+        randomSeed(rand32);
+        Serial.print("[LR-PUF] Generated random number for seeding: ");
+        Serial.println(rand32);
+
+        int random_index = random(num_valid_challenges);
+
+        Serial.print("[LR-PUF] For S_0, randomly selected challenge index: ");
+        Serial.println(random_index);
+
+        ChoicePUFChallenge &challenge = valid_challenges[random_index];
+
+        uint64_t puf_response = execute_challenge(challenge.tt, challenge.bt, challenge.tc, challenge.bc, 1, 10);
+
+        Serial.print("[LR-PUF] PUF response for S_0: ");
+        print_binary(puf_response, PUF_RESPONSE_BITS);
+        Serial.print(" (");
+        Serial.print(puf_response);
+        Serial.println(")");
+
+        // compute the hash of the PUF challenge + response + rand32 + millis
+        sha256.reset();
+        sha256.update(&challenge.tc, sizeof(challenge.tc));
+        sha256.update(&challenge.tt, sizeof(challenge.tt));
+        sha256.update(&challenge.bc, sizeof(challenge.bc));
+        sha256.update(&challenge.bt, sizeof(challenge.bt));
+        sha256.update(&puf_response, sizeof(puf_response));
+        sha256.update(&rand32, sizeof(rand32));
+        unsigned long now = millis();
+        sha256.update(&now, sizeof(now));
+        sha256.finalize(state.hash_value.data(), state.hash_value.size());
+
+        state.last_choice_puf_challenge = challenge;
+        state.last_used_time = now; // millis();
+        return;
+    }
+
+    // For S_i (i>0)
+    uint32_t rand32 = generateRandomSeed();
+    randomSeed(rand32);
+    Serial.print("[LR-PUF] Generated random number for reconfiguration: ");
+    Serial.println(rand32);
+
+    sha256.reset();
+    sha256.update(state.hash_value.data(), state.hash_value.size());
+    sha256.update(&rand32, sizeof(rand32));
+    unsigned long now = millis();
+    sha256.update(&now, sizeof(now));
+    sha256.finalize(state.hash_value.data(), state.hash_value.size());
+    return;
+}
+
+void reconfigure(int state_index)
+{
+    // ignore the index for now
+    Serial.println("[LR-PUF] Reconfiguring state...");
+    Serial.print("[LR-PUF] Current state hash value before reconfiguration: ");
+    print_binary(current_state.hash_value.data(), current_state.hash_value.size());
+    Serial.print(" (");
+    for (size_t i = 0; i < current_state.hash_value.size(); i++)
+    {
+        Serial.print(current_state.hash_value[i], HEX);
+    }
+    Serial.println(")");
+    reconfigure_state(current_state);
+    Serial.print("[LR-PUF] State hash value after reconfiguration: ");
+    print_binary(current_state.hash_value.data(), current_state.hash_value.size());
+    Serial.print(" (");
+    for (size_t i = 0; i < current_state.hash_value.size(); i++)
+    {
+        Serial.print(current_state.hash_value[i], HEX);
+    }
+    Serial.println(")");
+}
+
+/***
  * @brief Finds valid challenges (those that don't return all ones) by testing all combinations and pre-allocating a fixed-size array to store results.
  */
 void find_valid_challenges()
@@ -295,7 +448,7 @@ void find_valid_challenges()
         delete[] valid_challenges;
     }
 
-    valid_challenges = new Challenge[MAX_POSSIBLE_CHALLENGES];
+    valid_challenges = new ChoicePUFChallenge[MAX_POSSIBLE_CHALLENGES];
     num_valid_challenges = 0;
 
     int response_delay = 1;
@@ -353,4 +506,80 @@ void find_valid_challenges()
       Serial.println(valid_challenges[i].bt);
     }
     */
+}
+
+std::array<uint8_t, 32> challenge_lr_puf(int challenge, int state_index)
+{
+    unsigned long start_time = millis();
+
+    // map the challenge to a valid (tc, tt, bc, bt) choice-puf challenge using the current state
+    ChoicePUFChallenge choice_challenge = map_in(challenge, state_index);
+    Serial.print("[LR-PUF] Mapped input challenge ");
+    Serial.print(challenge);
+    Serial.print(" to choice-puf challenge: tc=");
+    Serial.print(choice_challenge.tc);
+    Serial.print(", tt=");
+    Serial.print(choice_challenge.tt);
+    Serial.print(", bc=");
+    Serial.print(choice_challenge.bc);
+    Serial.print(", bt=");
+    Serial.println(choice_challenge.bt);
+
+    uint64_t puf_response = execute_challenge(choice_challenge.tt, choice_challenge.bt, choice_challenge.tc, choice_challenge.bc, 1, 10);
+
+    std::array<uint8_t, 32> output = map_out(puf_response, state_index, challenge);
+
+    unsigned long end_time = millis();
+    Serial.print("[LR-PUF] Total challenge execution time: ");
+    Serial.print((end_time - start_time) / 1000.0, 3);
+    Serial.println(" s");
+
+    Serial.print("[LR-PUF] Final output hash for challenge ");
+    Serial.print(challenge);
+    Serial.print(": ");
+    print_binary(output.data(), output.size());
+    Serial.print(" (");
+    for (size_t i = 0; i < output.size(); i++)
+    {
+        Serial.print(output[i], HEX);
+    }
+    Serial.println(")");
+
+    return output;
+}
+
+ChoicePUFChallenge map_in(int challenge, int state_index)
+{
+    // ignore state_index for now
+
+    // 1. Hash the current state's hash and the external challenge together
+    sha256.reset();
+    sha256.update(current_state.hash_value.data(), current_state.hash_value.size());
+    sha256.update((uint8_t *)&challenge, sizeof(challenge));
+
+    std::array<uint8_t, HASH_SIZE> new_hash;
+    sha256.finalize(new_hash.data(), new_hash.size());
+
+    uint32_t combined = (uint32_t)new_hash[0] << 24 |
+                        (uint32_t)new_hash[1] << 16 |
+                        (uint32_t)new_hash[2] << 8 |
+                        (uint32_t)new_hash[3];
+
+    int valid_index = combined % num_valid_challenges;
+
+    return valid_challenges[valid_index];
+}
+
+std::array<uint8_t, 32> map_out(uint64_t puf_response, int state_index, int challenge)
+{
+    // ignore state_index for now
+
+    sha256.reset();
+    sha256.update(current_state.hash_value.data(), current_state.hash_value.size());
+    sha256.update((uint8_t *)&challenge, sizeof(challenge));
+    sha256.update((uint8_t *)&puf_response, sizeof(puf_response));
+
+    std::array<uint8_t, HASH_SIZE> output_hash;
+    sha256.finalize(output_hash.data(), output_hash.size());
+    return output_hash;
 }
