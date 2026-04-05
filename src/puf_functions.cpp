@@ -25,7 +25,13 @@ struct State
     unsigned long last_used_time = 0;
 };
 
-static State current_state;
+const int NUM_STATES = 11;
+static State states[NUM_STATES];
+
+static State &get_state(int state_index)
+{
+    return states[state_index];
+}
 
 // --- Pre-calculate the maximum possible number of challenges ---
 // (tc, bc) pairs where tc > bc: (1,0), (2,0), (2,1), (3,0), (3,1), (3,2) -> 6 pairs
@@ -413,23 +419,26 @@ void reconfigure_state(State &state)
 
 void reconfigure(int state_index)
 {
-    // ignore the index for now
+    State &state = states[state_index];
+
     Serial.println("[LR-PUF] Reconfiguring state...");
+    Serial.print("[LR-PUF] State index: ");
+    Serial.println(state_index);
     Serial.print("[LR-PUF] Current state hash value before reconfiguration: ");
-    print_binary(current_state.hash_value.data(), current_state.hash_value.size());
+    print_binary(state.hash_value.data(), state.hash_value.size());
     Serial.print(" (");
-    for (size_t i = 0; i < current_state.hash_value.size(); i++)
+    for (size_t i = 0; i < state.hash_value.size(); i++)
     {
-        Serial.print(current_state.hash_value[i], HEX);
+        Serial.print(state.hash_value[i], HEX);
     }
     Serial.println(")");
-    reconfigure_state(current_state);
+    reconfigure_state(state);
     Serial.print("[LR-PUF] State hash value after reconfiguration: ");
-    print_binary(current_state.hash_value.data(), current_state.hash_value.size());
+    print_binary(state.hash_value.data(), state.hash_value.size());
     Serial.print(" (");
-    for (size_t i = 0; i < current_state.hash_value.size(); i++)
+    for (size_t i = 0; i < state.hash_value.size(); i++)
     {
-        Serial.print(current_state.hash_value[i], HEX);
+        Serial.print(state.hash_value[i], HEX);
     }
     Serial.println(")");
 }
@@ -508,7 +517,7 @@ void find_valid_challenges()
     */
 }
 
-std::array<uint8_t, 32> challenge_lr_puf(int challenge, int state_index)
+std::array<uint8_t, 32> challenge_lr_puf(int challenge, int state_index, int count, int resp_delay_ms)
 {
     unsigned long start_time = millis();
 
@@ -525,7 +534,7 @@ std::array<uint8_t, 32> challenge_lr_puf(int challenge, int state_index)
     Serial.print(", bt=");
     Serial.println(choice_challenge.bt);
 
-    uint64_t puf_response = execute_challenge(choice_challenge.tt, choice_challenge.bt, choice_challenge.tc, choice_challenge.bc, 1, 10);
+    uint64_t puf_response = execute_challenge(choice_challenge.tt, choice_challenge.bt, choice_challenge.tc, choice_challenge.bc, count, resp_delay_ms);
 
     std::array<uint8_t, 32> output = map_out(puf_response, state_index, challenge);
 
@@ -550,11 +559,11 @@ std::array<uint8_t, 32> challenge_lr_puf(int challenge, int state_index)
 
 ChoicePUFChallenge map_in(int challenge, int state_index)
 {
-    // ignore state_index for now
+    State &state = get_state(state_index);
 
-    // 1. Hash the current state's hash and the external challenge together
+    // 1. Hash the selected state's hash and the external challenge together
     sha256.reset();
-    sha256.update(current_state.hash_value.data(), current_state.hash_value.size());
+    sha256.update(state.hash_value.data(), state.hash_value.size());
     sha256.update((uint8_t *)&challenge, sizeof(challenge));
 
     std::array<uint8_t, HASH_SIZE> new_hash;
@@ -572,10 +581,10 @@ ChoicePUFChallenge map_in(int challenge, int state_index)
 
 std::array<uint8_t, 32> map_out(uint64_t puf_response, int state_index, int challenge)
 {
-    // ignore state_index for now
+    State &state = get_state(state_index);
 
     sha256.reset();
-    sha256.update(current_state.hash_value.data(), current_state.hash_value.size());
+    sha256.update(state.hash_value.data(), state.hash_value.size());
     sha256.update((uint8_t *)&challenge, sizeof(challenge));
     sha256.update((uint8_t *)&puf_response, sizeof(puf_response));
 

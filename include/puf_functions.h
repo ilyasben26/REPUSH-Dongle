@@ -7,7 +7,7 @@
 
 extern bool debug_mode;
 
-std::array<uint8_t, 32> challenge_lr_puf(int challenge, int state_index);
+std::array<uint8_t, 32> challenge_lr_puf(int challenge, int state_index, int count, int resp_delay_ms);
 void build_payload(uint8_t command, uint64_t data_value, uint8_t *payload);
 void send_command(const uint8_t *payload);
 bool read_response(uint8_t *response, unsigned long timeout = 2000);

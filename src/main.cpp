@@ -21,8 +21,9 @@ void setup()
   Serial.println("  led_on / led_off");
   Serial.println("  debug_on / debug_off");
   Serial.println("  find_valid");
-  Serial.println("  reconfigure");
-  Serial.println("  challenge <int>");
+  Serial.println("  reconfigure <state_index>");
+  Serial.println("  challenge <c> <state_index>");
+  Serial.println("    state_index: 0-10");
   Serial.println("  challenge choice-puf <tc> <tt> <bc> <bt> <count> <delay>");
   Serial.println("    tt: top_tune (0-7), bt: bottom_tune (0-7)");
   Serial.println("    tc: top_choice (1-3), bc: bottom_choice (0-2)");
@@ -67,18 +68,35 @@ void loop()
     }
     else if (command_str.startsWith("reconfigure"))
     {
-      reconfigure(0);
-    }
-    else if (command_str.startsWith("challenge "))
-    {
-      int challenge_num = command_str.substring(10).toInt();
-      if (challenge_num > 0)
+      int args[1];
+      int arg_count = 0;
+      int current_pos = command_str.indexOf(' ');
+
+      while (current_pos != -1 && arg_count < 1)
       {
-        challenge_lr_puf(challenge_num, 0);
+        int next_pos = command_str.indexOf(' ', current_pos + 1);
+        String arg_str = (next_pos == -1) ? command_str.substring(current_pos + 1) : command_str.substring(current_pos + 1, next_pos);
+        args[arg_count++] = arg_str.toInt();
+        current_pos = next_pos;
+      }
+
+      if (arg_count == 1)
+      {
+        int state_index = args[0];
+
+        if (state_index < 0 || state_index > 10)
+        {
+          Serial.println("Error: state_index must be between 0 and 10.");
+        }
+        else
+        {
+          reconfigure(state_index);
+        }
       }
       else
       {
-        Serial.println("Error: Invalid challenge number.");
+        Serial.println("Error: Invalid command format.");
+        Serial.println("Expected: reconfigure <state_index>");
       }
     }
     else if (command_str.startsWith("challenge choice-puf "))
@@ -110,6 +128,42 @@ void loop()
       {
         Serial.println("Error: Invalid 'challenge' command format.");
         Serial.println("Expected: challenge <tc> <tt> <bc> <bt> <count> [delay]");
+      }
+    }
+    else if (command_str.startsWith("challenge "))
+    {
+      int args[4];
+      int arg_count = 0;
+      int current_pos = command_str.indexOf(' ');
+
+      while (current_pos != -1 && arg_count < 4)
+      {
+        int next_pos = command_str.indexOf(' ', current_pos + 1);
+        String arg_str = (next_pos == -1) ? command_str.substring(current_pos + 1) : command_str.substring(current_pos + 1, next_pos);
+        args[arg_count++] = arg_str.toInt();
+        current_pos = next_pos;
+      }
+
+      if (arg_count == 4)
+      {
+        int challenge = args[0];
+        int state_index = args[1];
+        int count = args[2];
+        int resp_delay_ms = args[3];
+
+        if (state_index < 0 || state_index > 10)
+        {
+          Serial.println("Error: state_index must be between 0 and 10.");
+        }
+        else
+        {
+          challenge_lr_puf(challenge, state_index, count, resp_delay_ms);
+        }
+      }
+      else
+      {
+        Serial.println("Error: Invalid command format.");
+        Serial.println("Expected: challenge <c> <state_index>");
       }
     }
     else if (command_str.length() > 0)

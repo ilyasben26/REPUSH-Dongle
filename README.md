@@ -10,7 +10,8 @@ challenge choice-puf 3 0 1 4 100 1
 
 
 find_valid
-reconfigure
-challenge 1234333
+reconfigure 0
+reconfigure 5
+challenge 1234333 0 1 1
 # (303826966) (303826966)
 ```
