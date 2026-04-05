@@ -38,15 +38,30 @@ static State &get_state(int state_index)
 // Total combinations = 6 pairs * 32 tt values * 32 bt values = 6144
 const int MAX_POSSIBLE_CHALLENGES = 6144;
 
-ChoicePUFChallenge *valid_challenges = nullptr;
+using PackedChallenge = uint16_t;
+static PackedChallenge valid_challenges[MAX_POSSIBLE_CHALLENGES];
 int num_valid_challenges = 0;
-int capacity = 0;
 
 const int PUF_RESPONSE_BITS = 32;
 const uint64_t PUF_RESPONSE_MASK = (1ULL << PUF_RESPONSE_BITS) - 1;
 
 ChoicePUFChallenge map_in(int challenge, int state_index);
 std::array<uint8_t, 32> map_out(uint64_t puf_response, int state_index, int challenge);
+
+static PackedChallenge pack_challenge(int tc, int tt, int bc, int bt)
+{
+    return (PackedChallenge)(((tc & 0x3) << 12) | ((tt & 0x1F) << 7) | ((bc & 0x3) << 5) | (bt & 0x1F));
+}
+
+static ChoicePUFChallenge unpack_challenge(PackedChallenge packed)
+{
+    ChoicePUFChallenge c;
+    c.tc = (packed >> 12) & 0x3;
+    c.tt = (packed >> 7) & 0x1F;
+    c.bc = (packed >> 5) & 0x3;
+    c.bt = packed & 0x1F;
+    return c;
+}
 
 /**
  * @brief Builds an 8-byte payload for the FPGA.
@@ -250,7 +265,10 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
     std::vector<int> bit_ones(PUF_RESPONSE_BITS, 0);
     std::map<uint64_t, int> sequence_counts;
 
-    Serial.println("[LR-PUF] Collecting PUF responses...");
+    if (debug_mode || count > 1)
+    {
+        Serial.println("[LR-PUF] Collecting PUF responses...");
+    }
     for (int i = 0; i < count; i++)
     {
         uint64_t value;
@@ -274,11 +292,20 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
 
     if (count == 1)
     {
-        Serial.println("[LR-PUF] Single response received:");
-        print_binary(sequence_counts.begin()->first, PUF_RESPONSE_BITS);
-        Serial.print(" (");
-        Serial.print(sequence_counts.begin()->first);
-        Serial.println(")");
+        if (sequence_counts.empty())
+        {
+            Serial.println("[Choice-PUF] Error: No response received for single-shot challenge.");
+            return -1;
+        }
+
+        if (debug_mode)
+        {
+            Serial.println("[LR-PUF] Single response received:");
+            print_binary(sequence_counts.begin()->first, PUF_RESPONSE_BITS);
+            Serial.print(" (");
+            Serial.print(sequence_counts.begin()->first);
+            Serial.println(")");
+        }
         return sequence_counts.begin()->first;
     }
 
@@ -301,8 +328,10 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
     int max_count = 0;
     if (!sequence_counts.empty())
     {
-        for (auto const &[val, num] : sequence_counts)
+        for (std::map<uint64_t, int>::const_iterator it = sequence_counts.begin(); it != sequence_counts.end(); ++it)
         {
+            uint64_t val = it->first;
+            int num = it->second;
             if (num > max_count)
             {
                 max_count = num;
@@ -389,7 +418,7 @@ void reconfigure_state(State &state)
         Serial.print("[LR-PUF] For S_0, randomly selected challenge index: ");
         Serial.println(random_index);
 
-        ChoicePUFChallenge &challenge = valid_challenges[random_index];
+        ChoicePUFChallenge challenge = unpack_challenge(valid_challenges[random_index]);
 
         uint64_t puf_response = execute_challenge(challenge.tt, challenge.bt, challenge.tc, challenge.bc, 1, 10);
 
@@ -466,12 +495,6 @@ void find_valid_challenges()
 
     unsigned long start_time = millis();
 
-    if (valid_challenges != nullptr)
-    {
-        delete[] valid_challenges;
-    }
-
-    valid_challenges = new ChoicePUFChallenge[MAX_POSSIBLE_CHALLENGES];
     num_valid_challenges = 0;
 
     int response_delay = 1;
@@ -489,12 +512,12 @@ void find_valid_challenges()
                     {
                         uint64_t puf_response = (uint64_t)execute_challenge(tt, bt, tc, bc, 1, response_delay);
 
-                        if (puf_response != ALL_ONES_32_BIT)
+                        if (puf_response != ALL_ONES_32_BIT && puf_response != (uint64_t)-1)
                         {
 
                             if (num_valid_challenges < MAX_POSSIBLE_CHALLENGES)
                             {
-                                valid_challenges[num_valid_challenges] = {tc, tt, bc, bt};
+                                valid_challenges[num_valid_challenges] = pack_challenge(tc, tt, bc, bt);
                                 num_valid_challenges++;
                             }
                         }
@@ -588,9 +611,15 @@ ChoicePUFChallenge map_in(int challenge, int state_index)
                         (uint32_t)new_hash[2] << 8 |
                         (uint32_t)new_hash[3];
 
+    if (num_valid_challenges <= 0)
+    {
+        Serial.println("[LR-PUF] Error: No valid challenges available. Run find_valid first.");
+        return {1, 0, 0, 0};
+    }
+
     int valid_index = combined % num_valid_challenges;
 
-    return valid_challenges[valid_index];
+    return unpack_challenge(valid_challenges[valid_index]);
 }
 
 std::array<uint8_t, 32> map_out(uint64_t puf_response, int state_index, int challenge)
