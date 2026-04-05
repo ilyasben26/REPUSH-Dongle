@@ -2,6 +2,7 @@
 #define PUF_FUNCTIONS_H
 
 #include <Arduino.h>
+#include <array>
 #include <vector>
 #include <map>
 

@@ -22,10 +22,10 @@ void setup()
   Serial.println("  debug_on / debug_off");
   Serial.println("  find_valid");
   Serial.println("  reconfigure <state_index>");
-  Serial.println("  challenge <c> <state_index>");
+  Serial.println("  challenge <c> <state_index> <count> <delay>");
   Serial.println("    state_index: 0-10");
   Serial.println("  challenge choice-puf <tc> <tt> <bc> <bt> <count> <delay>");
-  Serial.println("    tt: top_tune (0-7), bt: bottom_tune (0-7)");
+  Serial.println("    tt: top_tune (0-31), bt: bottom_tune (0-31)");
   Serial.println("    tc: top_choice (1-3), bc: bottom_choice (0-2)");
   Serial.println("    count: number of reads (e.g., 100)");
   Serial.println("    delay: response delay in ms (e.g., 50)");
@@ -101,33 +101,26 @@ void loop()
     }
     else if (command_str.startsWith("challenge choice-puf "))
     {
-      int args[6];
-      int arg_count = 0;
-      int current_pos = command_str.indexOf(' ');
+      String args_str = command_str.substring(String("challenge choice-puf ").length());
+      int top_choice = 0;
+      int top_tune = 0;
+      int bottom_choice = 0;
+      int bottom_tune = 0;
+      int count = 0;
+      int resp_delay_ms = 50;
 
-      while (current_pos != -1 && arg_count < 6)
+      int parsed = sscanf(args_str.c_str(), "%d %d %d %d %d %d",
+                          &top_choice, &top_tune, &bottom_choice, &bottom_tune,
+                          &count, &resp_delay_ms);
+
+      if (parsed >= 5)
       {
-        int next_pos = command_str.indexOf(' ', current_pos + 1);
-        String arg_str = (next_pos == -1) ? command_str.substring(current_pos + 1) : command_str.substring(current_pos + 1, next_pos);
-        args[arg_count++] = arg_str.toInt();
-        current_pos = next_pos;
-      }
-
-      if (arg_count >= 5)
-      {
-        int top_choice = args[0];
-        int top_tune = args[1];
-        int bottom_choice = args[2];
-        int bottom_tune = args[3];
-        int count = args[4];
-        int resp_delay_ms = (arg_count == 6) ? args[5] : 50;
-
         execute_challenge(top_tune, bottom_tune, top_choice, bottom_choice, count, resp_delay_ms);
       }
       else
       {
         Serial.println("Error: Invalid 'challenge' command format.");
-        Serial.println("Expected: challenge <tc> <tt> <bc> <bt> <count> [delay]");
+        Serial.println("Expected: challenge choice-puf <tc> <tt> <bc> <bt> <count> [delay]");
       }
     }
     else if (command_str.startsWith("challenge "))

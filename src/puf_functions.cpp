@@ -35,14 +35,14 @@ static State &get_state(int state_index)
 
 // --- Pre-calculate the maximum possible number of challenges ---
 // (tc, bc) pairs where tc > bc: (1,0), (2,0), (2,1), (3,0), (3,1), (3,2) -> 6 pairs
-// Total combinations = 6 pairs * 8 tt values * 8 bt values = 384
-const int MAX_POSSIBLE_CHALLENGES = 384;
+// Total combinations = 6 pairs * 32 tt values * 32 bt values = 6144
+const int MAX_POSSIBLE_CHALLENGES = 6144;
 
 ChoicePUFChallenge *valid_challenges = nullptr;
 int num_valid_challenges = 0;
 int capacity = 0;
 
-const int PUF_RESPONSE_BITS = 30;
+const int PUF_RESPONSE_BITS = 32;
 const uint64_t PUF_RESPONSE_MASK = (1ULL << PUF_RESPONSE_BITS) - 1;
 
 ChoicePUFChallenge map_in(int challenge, int state_index);
@@ -70,33 +70,32 @@ void send_command(const uint8_t *payload)
 }
 
 /**
- * @brief Reads a 16-byte response from the FPGA via Serial1.
+ * @brief Reads a 4-byte response from the FPGA via Serial1.
  */
 bool read_response(uint8_t *response, unsigned long timeout)
 {
     unsigned long start_time = millis();
     size_t bytes_read = 0;
-    while (bytes_read < 16 && (millis() - start_time) < timeout)
+    while (bytes_read < 4 && (millis() - start_time) < timeout)
     {
         if (Serial1.available())
         {
-            bytes_read += Serial1.readBytes(response + bytes_read, 16 - bytes_read);
+            bytes_read += Serial1.readBytes(response + bytes_read, 4 - bytes_read);
         }
     }
-    return bytes_read == 16;
+    return bytes_read == 4;
 }
 
 /**
- * @brief Converts the relevant part of a 16-byte response to a 64-bit integer.
+ * @brief Converts a 4-byte big-endian response to a 64-bit integer.
  */
 uint64_t bytes_to_uint64(const uint8_t *bytes)
 {
-    uint64_t value = 0;
-    for (int i = 8; i < 16; i++)
-    {
-        value = (value << 8) | bytes[i];
-    }
-    return value;
+    uint32_t value = ((uint32_t)bytes[0] << 24) |
+                     ((uint32_t)bytes[1] << 16) |
+                     ((uint32_t)bytes[2] << 8) |
+                     (uint32_t)bytes[3];
+    return (uint64_t)value;
 }
 
 void print_binary(uint64_t value, int bits);
@@ -151,7 +150,7 @@ void send_setup_and_wait(uint8_t command, uint64_t data_value, unsigned long del
 bool request_puf_response(uint64_t &puf_value, unsigned long req_delay_ms)
 {
     uint8_t payload[8];
-    uint8_t response[16];
+    uint8_t response[4];
 
     build_payload(0x1, 0, payload);
     send_command(payload);
@@ -181,12 +180,27 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
         Serial.println("Error: top_choice must be greater than bottom_choice.");
         return -1;
     }
+    if (top_tune < 0 || top_tune > 31 || bottom_tune < 0 || bottom_tune > 31)
+    {
+        Serial.println("Error: top_tune and bottom_tune must be in range 0..31.");
+        return -1;
+    }
+    if (top_choice < 0 || top_choice > 3 || bottom_choice < 0 || bottom_choice > 3)
+    {
+        Serial.println("Error: top_choice and bottom_choice must be in range 0..3.");
+        return -1;
+    }
+    if (count <= 0)
+    {
+        Serial.println("Error: count must be greater than 0.");
+        return -1;
+    }
 
     unsigned long challenge_start = millis();
     const unsigned long setup_delay = 10; // 10ms delay for setup commands
 
     // 1. Tune top and bottom
-    uint64_t tune_val = ((top_tune & 0x7) << 5) | ((bottom_tune & 0x7) << 2);
+    uint64_t tune_val = ((top_tune & 0x1F) << 5) | (bottom_tune & 0x1F);
     if (debug_mode)
     {
         Serial.print("[Choice-PUF] top_tune=");
@@ -207,18 +221,7 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
     }
     send_setup_and_wait(0x3, choice_val, setup_delay);
 
-    // 3. Determine and set bottom pattern
-    uint32_t bottom_pattern = (bottom_choice % 2 == 0) ? 0xAAAAAAAA : 0x55555555;
-    int bottom_in_bit = (bottom_choice % 2 == 0) ? 0 : 1;
-    uint64_t bottom_payload_val = ((uint64_t)(bottom_in_bit & 0x1) << 32) | bottom_pattern;
-    if (debug_mode)
-    {
-        Serial.print("[Choice-PUF] bottom_pattern=0x");
-        Serial.println(bottom_pattern, HEX);
-    }
-    send_setup_and_wait(0x5, bottom_payload_val, setup_delay);
-
-    // 4. Determine and set top pattern
+    // 3. Determine and set top pattern
     uint32_t top_pattern = (top_choice % 2 != 0) ? 0xAAAAAAAA : 0x55555555;
     int top_in_bit = (top_choice % 2 != 0) ? 0 : 1;
     uint64_t top_payload_val = ((uint64_t)(top_in_bit & 0x1) << 32) | top_pattern;
@@ -228,6 +231,17 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
         Serial.println(top_pattern, HEX);
     }
     send_setup_and_wait(0x4, top_payload_val, setup_delay);
+
+    // 4. Determine and set bottom pattern
+    uint32_t bottom_pattern = (bottom_choice % 2 == 0) ? 0xAAAAAAAA : 0x55555555;
+    int bottom_in_bit = (bottom_choice % 2 == 0) ? 0 : 1;
+    uint64_t bottom_payload_val = ((uint64_t)(bottom_in_bit & 0x1) << 32) | bottom_pattern;
+    if (debug_mode)
+    {
+        Serial.print("[Choice-PUF] bottom_pattern=0x");
+        Serial.println(bottom_pattern, HEX);
+    }
+    send_setup_and_wait(0x5, bottom_payload_val, setup_delay);
 
     // 5. Query PUF 'count' times
     while (Serial1.available())
@@ -461,21 +475,21 @@ void find_valid_challenges()
     num_valid_challenges = 0;
 
     int response_delay = 1;
-    const long ALL_ONES_30_BIT = 0x3FFFFFFF;
+    const uint64_t ALL_ONES_32_BIT = 0xFFFFFFFFULL;
 
     for (int tc = 1; tc <= 3; tc++)
     {
-        for (int tt = 0; tt <= 7; tt++)
+        for (int tt = 0; tt <= 31; tt++)
         {
             for (int bc = 0; bc <= 2; bc++)
             {
                 if (tc > bc)
                 {
-                    for (int bt = 0; bt <= 7; bt++)
+                    for (int bt = 0; bt <= 31; bt++)
                     {
-                        long puf_response = execute_challenge(tt, bt, tc, bc, 1, response_delay);
+                        uint64_t puf_response = (uint64_t)execute_challenge(tt, bt, tc, bc, 1, response_delay);
 
-                        if (puf_response != ALL_ONES_30_BIT)
+                        if (puf_response != ALL_ONES_32_BIT)
                         {
 
                             if (num_valid_challenges < MAX_POSSIBLE_CHALLENGES)
