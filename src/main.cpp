@@ -25,7 +25,7 @@ void setup()
   Serial.println("  challenge <c> <state_index> <count> <delay>");
   Serial.println("    state_index: 0-10");
   Serial.println("  challenge choice-puf <tc> <tt> <bc> <bt> <count> <delay>");
-  Serial.println("    tt: top_tune (0-31), bt: bottom_tune (0-31)");
+  Serial.println("    tt: top_tune (0-7), bt: bottom_tune (0-7)");
   Serial.println("    tc: top_choice (1-3), bc: bottom_choice (0-2)");
   Serial.println("    count: number of reads (e.g., 100)");
   Serial.println("    delay: response delay in ms (e.g., 50)");
@@ -115,7 +115,8 @@ void loop()
 
       if (parsed >= 5)
       {
-        execute_challenge(top_tune, bottom_tune, top_choice, bottom_choice, count, resp_delay_ms);
+        std::array<uint8_t, 16> majority_response;
+        execute_challenge(top_tune, bottom_tune, top_choice, bottom_choice, count, resp_delay_ms, majority_response);
       }
       else
       {
@@ -156,7 +157,7 @@ void loop()
       else
       {
         Serial.println("Error: Invalid command format.");
-        Serial.println("Expected: challenge <c> <state_index>");
+        Serial.println("Expected: challenge <c> <state_index> <count> <delay>");
       }
     }
     else if (command_str.length() > 0)

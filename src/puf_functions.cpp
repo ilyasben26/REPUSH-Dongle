@@ -1,5 +1,6 @@
 #include "puf_functions.h"
 #include <array>
+#include <cstring>
 #include <Crypto.h>
 #include <SHA256.h>
 
@@ -35,32 +36,58 @@ static State &get_state(int state_index)
 
 // --- Pre-calculate the maximum possible number of challenges ---
 // (tc, bc) pairs where tc > bc: (1,0), (2,0), (2,1), (3,0), (3,1), (3,2) -> 6 pairs
-// Total combinations = 6 pairs * 32 tt values * 32 bt values = 6144
-const int MAX_POSSIBLE_CHALLENGES = 6144;
+// Total combinations = 6 pairs * 8 tt values * 8 bt values = 384
+const int MAX_POSSIBLE_CHALLENGES = 384;
 
 using PackedChallenge = uint16_t;
 static PackedChallenge valid_challenges[MAX_POSSIBLE_CHALLENGES];
 int num_valid_challenges = 0;
 
-const int PUF_RESPONSE_BITS = 32;
-const uint64_t PUF_RESPONSE_MASK = (1ULL << PUF_RESPONSE_BITS) - 1;
+const int PUF_RESPONSE_BITS = 128;
+const int PUF_RESPONSE_BYTES = 16;
 
 ChoicePUFChallenge map_in(int challenge, int state_index);
-std::array<uint8_t, 32> map_out(uint64_t puf_response, int state_index, int challenge);
+std::array<uint8_t, 32> map_out(const std::array<uint8_t, 16> &puf_response, int state_index, int challenge);
 
 static PackedChallenge pack_challenge(int tc, int tt, int bc, int bt)
 {
-    return (PackedChallenge)(((tc & 0x3) << 12) | ((tt & 0x1F) << 7) | ((bc & 0x3) << 5) | (bt & 0x1F));
+    return (PackedChallenge)(((tc & 0x3) << 8) | ((tt & 0x7) << 5) | ((bc & 0x3) << 3) | (bt & 0x7));
 }
 
 static ChoicePUFChallenge unpack_challenge(PackedChallenge packed)
 {
     ChoicePUFChallenge c;
-    c.tc = (packed >> 12) & 0x3;
-    c.tt = (packed >> 7) & 0x1F;
-    c.bc = (packed >> 5) & 0x3;
-    c.bt = packed & 0x1F;
+    c.tc = (packed >> 8) & 0x3;
+    c.tt = (packed >> 5) & 0x7;
+    c.bc = (packed >> 3) & 0x3;
+    c.bt = packed & 0x7;
     return c;
+}
+
+static bool is_all_ones_response(const std::array<uint8_t, 16> &value)
+{
+    for (size_t i = 0; i < value.size(); ++i)
+    {
+        if (value[i] != 0xFF)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool get_response_bit(const std::array<uint8_t, 16> &value, int bit)
+{
+    int byte_index = PUF_RESPONSE_BYTES - 1 - (bit / 8);
+    int bit_index = bit % 8;
+    return ((value[byte_index] >> bit_index) & 0x1) != 0;
+}
+
+static void set_response_bit(std::array<uint8_t, 16> &value, int bit)
+{
+    int byte_index = PUF_RESPONSE_BYTES - 1 - (bit / 8);
+    int bit_index = bit % 8;
+    value[byte_index] |= (uint8_t)(1U << bit_index);
 }
 
 /**
@@ -85,32 +112,28 @@ void send_command(const uint8_t *payload)
 }
 
 /**
- * @brief Reads a 4-byte response from the FPGA via Serial1.
+ * @brief Reads a 16-byte response from the FPGA via Serial1.
  */
 bool read_response(uint8_t *response, unsigned long timeout)
 {
     unsigned long start_time = millis();
     size_t bytes_read = 0;
-    while (bytes_read < 4 && (millis() - start_time) < timeout)
+    while (bytes_read < PUF_RESPONSE_BYTES && (millis() - start_time) < timeout)
     {
         if (Serial1.available())
         {
-            bytes_read += Serial1.readBytes(response + bytes_read, 4 - bytes_read);
+            bytes_read += Serial1.readBytes(response + bytes_read, PUF_RESPONSE_BYTES - bytes_read);
         }
     }
-    return bytes_read == 4;
+    return bytes_read == PUF_RESPONSE_BYTES;
 }
 
 /**
- * @brief Converts a 4-byte big-endian response to a 64-bit integer.
+ * @brief Copies a 16-byte big-endian response into an array.
  */
-uint64_t bytes_to_uint64(const uint8_t *bytes)
+void bytes_to_array16(const uint8_t *bytes, std::array<uint8_t, 16> &out)
 {
-    uint32_t value = ((uint32_t)bytes[0] << 24) |
-                     ((uint32_t)bytes[1] << 16) |
-                     ((uint32_t)bytes[2] << 8) |
-                     (uint32_t)bytes[3];
-    return (uint64_t)value;
+    memcpy(out.data(), bytes, PUF_RESPONSE_BYTES);
 }
 
 void print_binary(uint64_t value, int bits);
@@ -162,10 +185,10 @@ void send_setup_and_wait(uint8_t command, uint64_t data_value, unsigned long del
 /**
  * @brief Sends a PUF request and reads the response.
  */
-bool request_puf_response(uint64_t &puf_value, unsigned long req_delay_ms)
+bool request_puf_response(std::array<uint8_t, 16> &puf_value, unsigned long req_delay_ms)
 {
     uint8_t payload[8];
-    uint8_t response[4];
+    uint8_t response[PUF_RESPONSE_BYTES];
 
     build_payload(0x1, 0, payload);
     send_command(payload);
@@ -173,7 +196,7 @@ bool request_puf_response(uint64_t &puf_value, unsigned long req_delay_ms)
 
     if (read_response(response))
     {
-        puf_value = bytes_to_uint64(response) & PUF_RESPONSE_MASK;
+        bytes_to_array16(response, puf_value);
         return true;
     }
     return false;
@@ -182,8 +205,10 @@ bool request_puf_response(uint64_t &puf_value, unsigned long req_delay_ms)
 /**
  * @brief Executes the Choice PUF challenge sequence.
  */
-int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_choice, int count, int resp_delay_ms)
+bool execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_choice, int count, int resp_delay_ms, std::array<uint8_t, 16> &majority_response)
 {
+
+    majority_response.fill(0);
 
     if (debug_mode)
     {
@@ -193,29 +218,29 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
     if (top_choice <= bottom_choice)
     {
         Serial.println("Error: top_choice must be greater than bottom_choice.");
-        return -1;
+        return false;
     }
-    if (top_tune < 0 || top_tune > 31 || bottom_tune < 0 || bottom_tune > 31)
+    if (top_tune < 0 || top_tune > 7 || bottom_tune < 0 || bottom_tune > 7)
     {
-        Serial.println("Error: top_tune and bottom_tune must be in range 0..31.");
-        return -1;
+        Serial.println("Error: top_tune and bottom_tune must be in range 0..7.");
+        return false;
     }
     if (top_choice < 0 || top_choice > 3 || bottom_choice < 0 || bottom_choice > 3)
     {
         Serial.println("Error: top_choice and bottom_choice must be in range 0..3.");
-        return -1;
+        return false;
     }
     if (count <= 0)
     {
         Serial.println("Error: count must be greater than 0.");
-        return -1;
+        return false;
     }
 
     unsigned long challenge_start = millis();
     const unsigned long setup_delay = 10; // 10ms delay for setup commands
 
     // 1. Tune top and bottom
-    uint64_t tune_val = ((top_tune & 0x1F) << 5) | (bottom_tune & 0x1F);
+    uint64_t tune_val = ((top_tune & 0x7) << 5) | ((bottom_tune & 0x7) << 2);
     if (debug_mode)
     {
         Serial.print("[Choice-PUF] top_tune=");
@@ -263,7 +288,7 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
         Serial1.read(); // Clear input buffer
 
     std::vector<int> bit_ones(PUF_RESPONSE_BITS, 0);
-    std::map<uint64_t, int> sequence_counts;
+    std::map<std::array<uint8_t, 16>, int> sequence_counts;
 
     if (debug_mode || count > 1)
     {
@@ -271,12 +296,12 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
     }
     for (int i = 0; i < count; i++)
     {
-        uint64_t value;
+        std::array<uint8_t, 16> value;
         if (request_puf_response(value, resp_delay_ms))
         {
             for (int bit = 0; bit < PUF_RESPONSE_BITS; bit++)
             {
-                if ((value >> bit) & 0x1)
+                if (get_response_bit(value, bit))
                 {
                     bit_ones[bit]++;
                 }
@@ -295,42 +320,38 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
         if (sequence_counts.empty())
         {
             Serial.println("[Choice-PUF] Error: No response received for single-shot challenge.");
-            return -1;
+            return false;
         }
 
-        if (debug_mode)
-        {
-            Serial.println("[LR-PUF] Single response received:");
-            print_binary(sequence_counts.begin()->first, PUF_RESPONSE_BITS);
-            Serial.print(" (");
-            Serial.print(sequence_counts.begin()->first);
-            Serial.println(")");
-        }
-        return sequence_counts.begin()->first;
+        majority_response = sequence_counts.begin()->first;
+        Serial.println("[LR-PUF] Single response received:");
+        print_binary(majority_response.data(), majority_response.size());
+        Serial.println();
+        return true;
     }
 
     // --- Process and print results ---
-    uint64_t majority_value_bit = 0;
+    std::array<uint8_t, 16> majority_value_bit;
+    majority_value_bit.fill(0);
     for (int bit = 0; bit < PUF_RESPONSE_BITS; bit++)
     {
         if (bit_ones[bit] * 2 >= count)
         {
-            majority_value_bit |= (1ULL << bit);
+            set_response_bit(majority_value_bit, bit);
         }
     }
     Serial.print("[LR-PUF] Majority-voted response (bit mode): ");
-    print_binary(majority_value_bit, PUF_RESPONSE_BITS);
-    Serial.print(" (");
-    Serial.print(majority_value_bit);
-    Serial.println(")");
+    print_binary(majority_value_bit.data(), majority_value_bit.size());
+    Serial.println();
 
-    uint64_t majority_value_seq = 0;
+    std::array<uint8_t, 16> majority_value_seq;
+    majority_value_seq.fill(0);
     int max_count = 0;
     if (!sequence_counts.empty())
     {
-        for (std::map<uint64_t, int>::const_iterator it = sequence_counts.begin(); it != sequence_counts.end(); ++it)
+        for (std::map<std::array<uint8_t, 16>, int>::const_iterator it = sequence_counts.begin(); it != sequence_counts.end(); ++it)
         {
-            uint64_t val = it->first;
+            const std::array<uint8_t, 16> &val = it->first;
             int num = it->second;
             if (num > max_count)
             {
@@ -340,10 +361,8 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
         }
     }
     Serial.print("[LR-PUF] Majority-voted response (sequence mode): ");
-    print_binary(majority_value_seq, PUF_RESPONSE_BITS);
-    Serial.print(" (");
-    Serial.print(majority_value_seq);
-    Serial.println(")");
+    print_binary(majority_value_seq.data(), majority_value_seq.size());
+    Serial.println();
 
     if (debug_mode)
     {
@@ -366,7 +385,8 @@ int execute_challenge(int top_tune, int bottom_tune, int top_choice, int bottom_
     Serial.print(challenge_elapsed / 1000.0, 3);
     Serial.println(" s");
 
-    return majority_value_bit; // Return the majority-voted response (bit mode)
+    majority_response = majority_value_bit;
+    return true;
 }
 
 /***
@@ -420,13 +440,16 @@ void reconfigure_state(State &state)
 
         ChoicePUFChallenge challenge = unpack_challenge(valid_challenges[random_index]);
 
-        uint64_t puf_response = execute_challenge(challenge.tt, challenge.bt, challenge.tc, challenge.bc, 1, 10);
+        std::array<uint8_t, 16> puf_response;
+        if (!execute_challenge(challenge.tt, challenge.bt, challenge.tc, challenge.bc, 1, 10, puf_response))
+        {
+            Serial.println("[LR-PUF] Error: Failed to collect PUF response for S_0.");
+            return;
+        }
 
         Serial.print("[LR-PUF] PUF response for S_0: ");
-        print_binary(puf_response, PUF_RESPONSE_BITS);
-        Serial.print(" (");
-        Serial.print(puf_response);
-        Serial.println(")");
+        print_binary(puf_response.data(), puf_response.size());
+        Serial.println();
 
         // compute the hash of the PUF challenge + response + rand32 + millis
         sha256.reset();
@@ -434,7 +457,7 @@ void reconfigure_state(State &state)
         sha256.update(&challenge.tt, sizeof(challenge.tt));
         sha256.update(&challenge.bc, sizeof(challenge.bc));
         sha256.update(&challenge.bt, sizeof(challenge.bt));
-        sha256.update(&puf_response, sizeof(puf_response));
+        sha256.update(puf_response.data(), puf_response.size());
         sha256.update(&rand32, sizeof(rand32));
         unsigned long now = millis();
         sha256.update(&now, sizeof(now));
@@ -498,21 +521,21 @@ void find_valid_challenges()
     num_valid_challenges = 0;
 
     int response_delay = 1;
-    const uint64_t ALL_ONES_32_BIT = 0xFFFFFFFFULL;
 
     for (int tc = 1; tc <= 3; tc++)
     {
-        for (int tt = 0; tt <= 31; tt++)
+        for (int tt = 0; tt <= 7; tt++)
         {
             for (int bc = 0; bc <= 2; bc++)
             {
                 if (tc > bc)
                 {
-                    for (int bt = 0; bt <= 31; bt++)
+                    for (int bt = 0; bt <= 7; bt++)
                     {
-                        uint64_t puf_response = (uint64_t)execute_challenge(tt, bt, tc, bc, 1, response_delay);
+                        std::array<uint8_t, 16> puf_response;
+                        bool ok = execute_challenge(tt, bt, tc, bc, 1, response_delay, puf_response);
 
-                        if (puf_response != ALL_ONES_32_BIT && puf_response != (uint64_t)-1)
+                        if (ok && !is_all_ones_response(puf_response))
                         {
 
                             if (num_valid_challenges < MAX_POSSIBLE_CHALLENGES)
@@ -571,7 +594,17 @@ std::array<uint8_t, 32> challenge_lr_puf(int challenge, int state_index, int cou
     Serial.print(", bt=");
     Serial.println(choice_challenge.bt);
 
-    uint64_t puf_response = execute_challenge(choice_challenge.tt, choice_challenge.bt, choice_challenge.tc, choice_challenge.bc, count, resp_delay_ms);
+    std::array<uint8_t, 16> puf_response;
+    if (!execute_challenge(choice_challenge.tt, choice_challenge.bt, choice_challenge.tc, choice_challenge.bc, count, resp_delay_ms, puf_response))
+    {
+        Serial.println("[LR-PUF] Error: challenge execution failed.");
+        std::array<uint8_t, 32> empty_output = {0};
+        return empty_output;
+    }
+
+    Serial.print("[LR-PUF] Raw PUF response: ");
+    print_binary(puf_response.data(), puf_response.size());
+    Serial.println();
 
     std::array<uint8_t, 32> output = map_out(puf_response, state_index, challenge);
 
@@ -622,14 +655,14 @@ ChoicePUFChallenge map_in(int challenge, int state_index)
     return unpack_challenge(valid_challenges[valid_index]);
 }
 
-std::array<uint8_t, 32> map_out(uint64_t puf_response, int state_index, int challenge)
+std::array<uint8_t, 32> map_out(const std::array<uint8_t, 16> &puf_response, int state_index, int challenge)
 {
     State &state = get_state(state_index);
 
     sha256.reset();
     sha256.update(state.hash_value.data(), state.hash_value.size());
     sha256.update((uint8_t *)&challenge, sizeof(challenge));
-    sha256.update((uint8_t *)&puf_response, sizeof(puf_response));
+    sha256.update(puf_response.data(), puf_response.size());
 
     std::array<uint8_t, HASH_SIZE> output_hash;
     sha256.finalize(output_hash.data(), output_hash.size());
