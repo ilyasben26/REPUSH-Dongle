@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Ed25519.h>
 #include "puf_functions.h"
 
 int led = LED_BUILTIN;
@@ -16,12 +17,14 @@ void setup()
     delay(10);
   }
 
-  Serial.println("Arduino PUF Client Initialized.");
+  Serial.println("REPUSH Dongle Initialized.");
   Serial.println("Commands:");
   Serial.println("  led_on / led_off");
   Serial.println("  debug_on / debug_off");
   Serial.println("  find_valid");
   Serial.println("  reconfigure <state_index>");
+  Serial.println("  keygen <challenge> <state_index>");
+  Serial.println("  sign <challenge> <state_index> <nonce> <cookies_b64>");
   Serial.println("  challenge <c> <state_index> <count> <delay>");
   Serial.println("    state_index: 0-10");
   Serial.println("  challenge choice-puf <tc> <tt> <bc> <bt> <count> <delay>");
@@ -97,6 +100,91 @@ void loop()
       {
         Serial.println("Error: Invalid command format.");
         Serial.println("Expected: reconfigure <state_index>");
+      }
+    }
+    else if (command_str.startsWith("keygen "))
+    {
+      int first_space = command_str.indexOf(' ', 7);
+
+      if (first_space != -1)
+      {
+        int challenge = command_str.substring(7, first_space).toInt();
+        int state_index = command_str.substring(first_space + 1).toInt();
+
+        if (state_index < 0 || state_index > 10)
+        {
+          Serial.println("Error: state_index must be between 0 and 10.");
+        }
+        else
+        {
+          std::array<uint8_t, 32> priv_key_array = challenge_lr_puf(challenge, state_index, 1, 1);
+          uint8_t privateKey[32];
+          std::copy(priv_key_array.begin(), priv_key_array.end(), privateKey);
+
+          uint8_t publicKey[32];
+          Ed25519::derivePublicKey(publicKey, privateKey);
+
+          Serial.print("PublicKey: ");
+          for (int i = 0; i < 32; i++)
+          {
+            if (publicKey[i] < 16)
+              Serial.print("0");
+            Serial.print(publicKey[i], HEX);
+          }
+          Serial.println();
+        }
+      }
+      else
+      {
+        Serial.println("Error: Invalid command format.");
+        Serial.println("Expected: keygen <challenge> <state_index>");
+      }
+    }
+    else if (command_str.startsWith("sign "))
+    {
+      int first_space = command_str.indexOf(' ', 5);
+      int second_space = command_str.indexOf(' ', first_space + 1);
+      int third_space = command_str.indexOf(' ', second_space + 1);
+
+      if (first_space != -1 && second_space != -1 && third_space != -1)
+      {
+        int challenge = command_str.substring(5, first_space).toInt();
+        int state_index = command_str.substring(first_space + 1, second_space).toInt();
+        String nonce = command_str.substring(second_space + 1, third_space);
+        String cookies_b64 = command_str.substring(third_space + 1);
+
+        String payload_str = nonce + cookies_b64;
+
+        if (state_index < 0 || state_index > 10)
+        {
+          Serial.println("Error: state_index must be between 0 and 10.");
+        }
+        else
+        {
+          std::array<uint8_t, 32> priv_key_array = challenge_lr_puf(challenge, state_index, 1, 1);
+          uint8_t privateKey[32];
+          std::copy(priv_key_array.begin(), priv_key_array.end(), privateKey);
+
+          uint8_t publicKey[32];
+          Ed25519::derivePublicKey(publicKey, privateKey);
+
+          uint8_t signature[64];
+          Ed25519::sign(signature, privateKey, publicKey, payload_str.c_str(), payload_str.length());
+
+          Serial.print("Signature: ");
+          for (int i = 0; i < 64; i++)
+          {
+            if (signature[i] < 16)
+              Serial.print("0");
+            Serial.print(signature[i], HEX);
+          }
+          Serial.println();
+        }
+      }
+      else
+      {
+        Serial.println("Error: Invalid command format.");
+        Serial.println("Expected: sign <challenge> <state_index> <nonce> <cookies_b64>");
       }
     }
     else if (command_str.startsWith("challenge choice-puf "))

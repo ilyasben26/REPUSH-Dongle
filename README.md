@@ -13,5 +13,7 @@ find_valid
 reconfigure 0
 reconfigure 5
 challenge 12311121 0 1 1
+keygen 1234 0
+sign 1234 0 09 testtest
 # (303826966) (303826966)
 ```
