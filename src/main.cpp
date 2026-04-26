@@ -6,6 +6,327 @@ int led = LED_BUILTIN;
 
 bool debug_mode = false;
 
+static constexpr uint8_t PROTO_SOF1 = 0xA5;
+static constexpr uint8_t PROTO_SOF2 = 0x5A;
+static constexpr uint8_t PROTO_VERSION = 1;
+static constexpr uint8_t PROTO_MSG_REQ = 1;
+static constexpr uint8_t PROTO_MSG_RSP = 2;
+static constexpr uint8_t PROTO_MSG_ERR = 3;
+static constexpr uint8_t PROTO_CMD_PING = 1;
+static constexpr uint8_t PROTO_CMD_GET_INFO = 2;
+static constexpr uint8_t PROTO_CMD_GET_TIME = 3;
+static constexpr size_t PROTO_MAX_PAYLOAD = 96;
+
+struct ProtoFrame
+{
+  uint8_t version;
+  uint8_t msg_type;
+  uint8_t seq;
+  uint8_t cmd;
+  uint16_t len;
+  uint8_t payload[PROTO_MAX_PAYLOAD];
+};
+
+uint16_t proto_crc16_update(uint16_t crc, uint8_t data)
+{
+  crc ^= data;
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    if (crc & 1)
+      crc = (crc >> 1) ^ 0xA001;
+    else
+      crc >>= 1;
+  }
+  return crc;
+}
+
+void fpga_flush_rx()
+{
+  while (Serial1.available())
+    Serial1.read();
+}
+
+void fpga_send_frame(uint8_t msg_type, uint8_t seq, uint8_t cmd, const uint8_t *payload, uint16_t len)
+{
+  uint16_t crc = 0xffff;
+  uint8_t b = 0;
+
+  Serial1.write(PROTO_SOF1);
+  Serial1.write(PROTO_SOF2);
+
+  b = PROTO_VERSION;
+  Serial1.write(b);
+  crc = proto_crc16_update(crc, b);
+
+  b = msg_type;
+  Serial1.write(b);
+  crc = proto_crc16_update(crc, b);
+
+  b = seq;
+  Serial1.write(b);
+  crc = proto_crc16_update(crc, b);
+
+  b = cmd;
+  Serial1.write(b);
+  crc = proto_crc16_update(crc, b);
+
+  b = static_cast<uint8_t>(len & 0xff);
+  Serial1.write(b);
+  crc = proto_crc16_update(crc, b);
+
+  b = static_cast<uint8_t>((len >> 8) & 0xff);
+  Serial1.write(b);
+  crc = proto_crc16_update(crc, b);
+
+  for (uint16_t i = 0; i < len; i++)
+  {
+    Serial1.write(payload[i]);
+    crc = proto_crc16_update(crc, payload[i]);
+  }
+
+  Serial1.write(static_cast<uint8_t>(crc & 0xff));
+  Serial1.write(static_cast<uint8_t>((crc >> 8) & 0xff));
+}
+
+bool fpga_read_frame(ProtoFrame &frame, uint32_t timeout_ms)
+{
+  enum ParseState
+  {
+    WAIT_SOF1,
+    WAIT_SOF2,
+    READ_HEADER,
+    READ_PAYLOAD,
+    READ_CRC_LO,
+    READ_CRC_HI
+  };
+
+  ParseState state = WAIT_SOF1;
+  uint8_t header[6] = {0};
+  uint16_t crc = 0xffff;
+  uint16_t header_index = 0;
+  uint16_t payload_index = 0;
+  uint8_t crc_lo = 0;
+  uint32_t start = millis();
+
+  while ((millis() - start) < timeout_ms)
+  {
+    if (!Serial1.available())
+      continue;
+
+    uint8_t ch = static_cast<uint8_t>(Serial1.read());
+
+    switch (state)
+    {
+    case WAIT_SOF1:
+      if (ch == PROTO_SOF1)
+        state = WAIT_SOF2;
+      break;
+
+    case WAIT_SOF2:
+      if (ch == PROTO_SOF2)
+      {
+        state = READ_HEADER;
+        header_index = 0;
+        payload_index = 0;
+        crc = 0xffff;
+      }
+      else if (ch != PROTO_SOF1)
+      {
+        state = WAIT_SOF1;
+      }
+      break;
+
+    case READ_HEADER:
+      header[header_index++] = ch;
+      crc = proto_crc16_update(crc, ch);
+      if (header_index == sizeof(header))
+      {
+        frame.version = header[0];
+        frame.msg_type = header[1];
+        frame.seq = header[2];
+        frame.cmd = header[3];
+        frame.len = static_cast<uint16_t>(header[4]) | (static_cast<uint16_t>(header[5]) << 8);
+
+        if (frame.version != PROTO_VERSION || frame.len > PROTO_MAX_PAYLOAD)
+        {
+          state = WAIT_SOF1;
+        }
+        else if (frame.len == 0)
+        {
+          state = READ_CRC_LO;
+        }
+        else
+        {
+          state = READ_PAYLOAD;
+        }
+      }
+      break;
+
+    case READ_PAYLOAD:
+      frame.payload[payload_index++] = ch;
+      crc = proto_crc16_update(crc, ch);
+      if (payload_index >= frame.len)
+        state = READ_CRC_LO;
+      break;
+
+    case READ_CRC_LO:
+      crc_lo = ch;
+      state = READ_CRC_HI;
+      break;
+
+    case READ_CRC_HI:
+    {
+      uint16_t rx_crc = static_cast<uint16_t>(crc_lo) | (static_cast<uint16_t>(ch) << 8);
+      if (rx_crc == crc)
+        return true;
+      state = WAIT_SOF1;
+      break;
+    }
+    }
+  }
+
+  return false;
+}
+
+bool fpga_rpc(uint8_t cmd, const uint8_t *request_payload, uint16_t request_len, ProtoFrame &response, uint32_t timeout_ms)
+{
+  static uint8_t seq = 1;
+  uint8_t tx_seq = seq++;
+  uint32_t start = millis();
+
+  if (request_len > PROTO_MAX_PAYLOAD)
+    return false;
+
+  fpga_flush_rx();
+  fpga_send_frame(PROTO_MSG_REQ, tx_seq, cmd, request_payload, request_len);
+
+  while ((millis() - start) < timeout_ms)
+  {
+    uint32_t remaining = timeout_ms - (millis() - start);
+    if (!fpga_read_frame(response, remaining))
+      return false;
+
+    if (response.seq == tx_seq && response.cmd == cmd)
+      return true;
+  }
+
+  return false;
+}
+
+void print_hex_bytes(const uint8_t *data, uint16_t len)
+{
+  for (uint16_t i = 0; i < len; i++)
+  {
+    if (data[i] < 16)
+      Serial.print("0");
+    Serial.print(data[i], HEX);
+  }
+}
+
+void do_fpga_ping()
+{
+  ProtoFrame response = {};
+  const uint8_t ping_payload[] = {'P', 'I', 'N', 'G'};
+
+  if (!fpga_rpc(PROTO_CMD_PING, ping_payload, sizeof(ping_payload), response, 1000))
+  {
+    Serial.println("FPGA ping failed: timeout or invalid frame.");
+    return;
+  }
+
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.print("FPGA ping failed with error code: ");
+    if (response.len > 0)
+      Serial.println(response.payload[0]);
+    else
+      Serial.println("unknown");
+    return;
+  }
+
+  Serial.print("FPGA ping OK, payload: ");
+  print_hex_bytes(response.payload, response.len);
+  Serial.println();
+}
+
+void do_fpga_info()
+{
+  ProtoFrame response = {};
+
+  if (!fpga_rpc(PROTO_CMD_GET_INFO, nullptr, 0, response, 1000))
+  {
+    Serial.println("FPGA info failed: timeout or invalid frame.");
+    return;
+  }
+
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.print("FPGA info failed with error code: ");
+    if (response.len > 0)
+      Serial.println(response.payload[0]);
+    else
+      Serial.println("unknown");
+    return;
+  }
+
+  if (response.len < 8)
+  {
+    Serial.println("FPGA info failed: short payload.");
+    return;
+  }
+
+  uint16_t max_payload = static_cast<uint16_t>(response.payload[1]) |
+                         (static_cast<uint16_t>(response.payload[2]) << 8);
+
+  Serial.print("FPGA protocol version: ");
+  Serial.println(response.payload[0]);
+  Serial.print("FPGA max payload: ");
+  Serial.println(max_payload);
+  Serial.print("FPGA feature bits: 0x");
+  Serial.println(response.payload[3], HEX);
+  Serial.print("FPGA FW version: ");
+  Serial.print(response.payload[4]);
+  Serial.print(".");
+  Serial.println(response.payload[5]);
+}
+
+void do_fpga_time()
+{
+  ProtoFrame response = {};
+
+  if (!fpga_rpc(PROTO_CMD_GET_TIME, nullptr, 0, response, 1000))
+  {
+    Serial.println("FPGA time failed: timeout or invalid frame.");
+    return;
+  }
+
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.print("FPGA time failed with error code: ");
+    if (response.len > 0)
+      Serial.println(response.payload[0]);
+    else
+      Serial.println("unknown");
+    return;
+  }
+
+  if (response.len < 4)
+  {
+    Serial.println("FPGA time failed: short payload.");
+    return;
+  }
+
+  uint32_t fpga_time = static_cast<uint32_t>(response.payload[0]) |
+                       (static_cast<uint32_t>(response.payload[1]) << 8) |
+                       (static_cast<uint32_t>(response.payload[2]) << 16) |
+                       (static_cast<uint32_t>(response.payload[3]) << 24);
+
+  Serial.print("FPGA time (hex): 0x");
+  Serial.println(fpga_time, HEX);
+  Serial.print("FPGA time (dec): ");
+  Serial.println(fpga_time);
+}
+
 void setup()
 {
   Serial.begin(115200);  // Computer <-> Arduino
@@ -25,6 +346,9 @@ void setup()
   Serial.println("  reconfigure <state_index>");
   Serial.println("  keygen <challenge> <state_index>");
   Serial.println("  sign <challenge> <state_index> <nonce> <cookies_b64>");
+  Serial.println("  fp_ping");
+  Serial.println("  fp_info");
+  Serial.println("  fp_time");
   Serial.println("  challenge <c> <state_index> <count> <delay>");
   Serial.println("    state_index: 0-10");
   Serial.println("  challenge choice-puf <tc> <tt> <bc> <bt> <count> <delay>");
@@ -250,28 +574,19 @@ void loop()
     }
     else if (command_str.equalsIgnoreCase("rc"))
     {
-      Serial.println("Sending 'rc' to FPGA...");
-
-      // Flush any pending data from the FPGA (e.g. earlier boot messages)
-      while (Serial1.available())
-      {
-        Serial1.read();
-      }
-
-      Serial1.print("rc\r\n");
-
-      Serial.print("FPGA Response:\n");
-      // Read everything that comes back with a small timeout
-      unsigned long start_time = millis();
-      while (millis() - start_time < 500)
-      {
-        while (Serial1.available())
-        {
-          Serial.print((char)Serial1.read());
-          start_time = millis(); // Reset timeout if data is flowing
-        }
-      }
-      Serial.println();
+      do_fpga_ping();
+    }
+    else if (command_str.equalsIgnoreCase("fp_ping"))
+    {
+      do_fpga_ping();
+    }
+    else if (command_str.equalsIgnoreCase("fp_info"))
+    {
+      do_fpga_info();
+    }
+    else if (command_str.equalsIgnoreCase("fp_time"))
+    {
+      do_fpga_time();
     }
     else if (command_str.length() > 0)
     {
