@@ -248,6 +248,31 @@ void loop()
         Serial.println("Expected: challenge <c> <state_index> <count> <delay>");
       }
     }
+    else if (command_str.equalsIgnoreCase("rc"))
+    {
+      Serial.println("Sending 'rc' to FPGA...");
+
+      // Flush any pending data from the FPGA (e.g. earlier boot messages)
+      while (Serial1.available())
+      {
+        Serial1.read();
+      }
+
+      Serial1.print("rc\r\n");
+
+      Serial.print("FPGA Response:\n");
+      // Read everything that comes back with a small timeout
+      unsigned long start_time = millis();
+      while (millis() - start_time < 500)
+      {
+        while (Serial1.available())
+        {
+          Serial.print((char)Serial1.read());
+          start_time = millis(); // Reset timeout if data is flowing
+        }
+      }
+      Serial.println();
+    }
     else if (command_str.length() > 0)
     {
       Serial.print("Unknown command: '");
