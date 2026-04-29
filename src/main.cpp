@@ -340,6 +340,7 @@ void setup()
 
   Serial.println("REPUSH Dongle Initialized.");
   Serial.println("Commands:");
+  Serial.println("*** DEBUG ONLY COMMANDS ***");
   Serial.println("  led_on / led_off");
   Serial.println("  debug_on / debug_off");
   Serial.println("  find_valid");
@@ -356,6 +357,8 @@ void setup()
   Serial.println("    tc: top_choice (1-3), bc: bottom_choice (0-2)");
   Serial.println("    count: number of reads (e.g., 100)");
   Serial.println("    delay: response delay in ms (e.g., 50)");
+  Serial.println("*** PUFMAN <-> DONGLE COMMANDS / PRODUCTION COMMANDS ***");
+  Serial.println("  enroll ");
 }
 
 void loop()
