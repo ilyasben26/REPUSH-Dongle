@@ -4,6 +4,15 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_ILI9341.h>
 #include <XPT2046_Touchscreen.h>
+#include <FlashStorage.h>
+
+struct CalibData
+{
+    uint32_t magic;
+    float xM, xC, yM, yC;
+};
+static const uint32_t CALIB_MAGIC = 0xCA11B0U;
+FlashStorage(calib_flash, CalibData);
 
 // Hardware pins — must match physical wiring (same as working_touch_game.ino)
 #define TKB_TFT_CS 10
@@ -506,14 +515,14 @@ void touch_kb_setup()
     _ts.setRotation(TKB_ROTATION);
 }
 
-void touch_kb_calibrate()
+static void run_calibration_sequence()
 {
     TS_Point p;
     int16_t x1, y1, x2, y2;
 
     _tft.fillScreen(ILI9341_BLACK);
     while (_ts.touched())
-        ; // wait until no finger on screen
+        ;
 
     // ── Crosshair 1: top-left corner ─────────────────────────────────────────
     _tft.drawFastHLine(10, 20, 20, ILI9341_RED);
@@ -554,6 +563,30 @@ void touch_kb_calibrate()
     _xC = 20.0f - (float)x1 * _xM;
     _yM = (float)(_sh - 40) / (float)(y2 - y1);
     _yC = 20.0f - (float)y1 * _yM;
+
+    CalibData d = {CALIB_MAGIC, _xM, _xC, _yM, _yC};
+    calib_flash.write(d);
+}
+
+void touch_kb_calibrate()
+{
+    CalibData d = calib_flash.read();
+    if (d.magic == CALIB_MAGIC &&
+        d.xM != 0.0f && d.yM != 0.0f &&
+        d.xM == d.xM && d.yM == d.yM) // NaN check
+    {
+        _xM = d.xM;
+        _xC = d.xC;
+        _yM = d.yM;
+        _yC = d.yC;
+        return;
+    }
+    run_calibration_sequence();
+}
+
+void touch_kb_force_calibrate()
+{
+    run_calibration_sequence();
 }
 
 bool touch_kb_confirm_login(const char *domain)

@@ -4,9 +4,13 @@
 // Initialize TFT and touchscreen hardware. Call once from setup().
 void touch_kb_setup();
 
-// Two-point calibration (blocking): displays crosshairs and waits for the
-// user to touch each one. Must be called after touch_kb_setup().
+// Two-point calibration: loads saved calibration from flash if available,
+// otherwise runs the crosshair sequence and saves the result to flash.
+// Must be called after touch_kb_setup().
 void touch_kb_calibrate();
+
+// Force a fresh crosshair calibration regardless of saved data, then save.
+void touch_kb_force_calibrate();
 
 // Full-screen login confirmation screen showing the target domain.
 // Returns true if the user presses ACCEPT, false if they press REJECT.
