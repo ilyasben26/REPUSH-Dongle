@@ -55,6 +55,14 @@ Server Private Key: 92e5351e55037d95302dd064b1af989f8262319b1ccd8087fc62aa3561c8
 
 
 
+## Enroll payload format
+
+`"login" || PUF_challenge(16B) || Nonce(16B), ["login" || PUF_challenge || Nonce]_SK_Server`
+
+- Message bytes: 5 + 16 + 16 = 37 bytes
+- Signature bytes: 64 bytes (Ed25519)
+- Total decoded payload bytes: 101 bytes
+
 ### Test with valid certificate
 
 ```bash
@@ -63,8 +71,10 @@ python3 test_enroll.py \
   --port /dev/tty.usbmodem11201 \
   enroll \
   --domain "ilyas.com" \
-  --server-pubkey server_public.hex
+  --server-pubkey server_public.hex \
+  --server-private-key server_private.hex
 ```
+
 ### Test with invalid tampered certificate
 
 ```bash
@@ -73,7 +83,34 @@ python3 test_enroll.py \
   --port /dev/tty.usbmodem11201 \
   enroll-bad \
   --domain "ilyas.com" \
-  --server-pubkey server_public.hex
+  --server-pubkey server_public.hex \
+  --server-private-key server_private.hex
+```
+
+### Test with valid cert but tampered payload signature
+
+```bash
+python3 test_enroll.py \
+  --ca-private-key ca_private.hex \
+  --port /dev/tty.usbmodem11201 \
+  enroll-payload-bad \
+  --domain "ilyas.com" \
+  --server-pubkey server_public.hex \
+  --server-private-key server_private.hex
+```
+
+### Use fixed challenge and nonce (hex)
+
+```bash
+python3 test_enroll.py \
+  --ca-private-key ca_private.hex \
+  --port /dev/tty.usbmodem11201 \
+  enroll \
+  --domain "ilyas.com" \
+  --server-pubkey server_public.hex \
+  --server-private-key server_private.hex \
+  --challenge-hex 00112233445566778899aabbccddeeff \
+  --nonce-hex ffeeddccbbaa99887766554433221100
 ```
 
 ## Certificate Format

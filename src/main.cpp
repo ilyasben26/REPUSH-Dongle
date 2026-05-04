@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Ed25519.h>
+#include <string.h>
 #include "puf_functions.h"
 
 int led = LED_BUILTIN;
@@ -21,6 +22,13 @@ static constexpr size_t CERT_DOMAIN_BYTES = 32;
 static constexpr size_t CERT_PK_SERVER_BYTES = 32;
 static constexpr size_t CERT_SIG_BYTES = 64;
 static constexpr size_t CERT_TOTAL_BYTES = CERT_DOMAIN_BYTES + CERT_PK_SERVER_BYTES + CERT_SIG_BYTES;
+
+static constexpr char ENROLL_PAYLOAD_PREFIX[] = "login";
+static constexpr size_t ENROLL_PAYLOAD_PREFIX_BYTES = 5;
+static constexpr size_t ENROLL_CHALLENGE_BYTES = 16;
+static constexpr size_t ENROLL_NONCE_BYTES = 16;
+static constexpr size_t ENROLL_PAYLOAD_MSG_BYTES = ENROLL_PAYLOAD_PREFIX_BYTES + ENROLL_CHALLENGE_BYTES + ENROLL_NONCE_BYTES;
+static constexpr size_t ENROLL_PAYLOAD_TOTAL_BYTES = ENROLL_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES;
 
 static uint8_t ca_pubkey[32] = {0};
 static bool ca_pubkey_loaded = false;
@@ -339,6 +347,54 @@ bool verify_cert_locally(const uint8_t *cert, size_t cert_len)
   return Ed25519::verify(signature, ca_pubkey, message, CERT_DOMAIN_BYTES + CERT_PK_SERVER_BYTES);
 }
 
+void print_domain_from_cert(const uint8_t *cert)
+{
+  char domain[CERT_DOMAIN_BYTES + 1] = {0};
+  size_t domain_len = 0;
+
+  while (domain_len < CERT_DOMAIN_BYTES && cert[domain_len] != 0)
+  {
+    domain[domain_len] = static_cast<char>(cert[domain_len]);
+    domain_len++;
+  }
+
+  Serial.print("Domain: ");
+  if (domain_len == 0)
+    Serial.println("<empty>");
+  else
+    Serial.println(domain);
+}
+
+void print_server_pubkey_from_cert(const uint8_t *cert)
+{
+  Serial.print("PK_Server: ");
+  print_hex_bytes(cert + CERT_DOMAIN_BYTES, CERT_PK_SERVER_BYTES);
+  Serial.println();
+}
+
+bool verify_enroll_payload(const uint8_t *cert, const uint8_t *payload, size_t payload_len)
+{
+  const uint8_t *server_pubkey = cert + CERT_DOMAIN_BYTES;
+  const uint8_t *message = payload;
+  const uint8_t *signature = payload + ENROLL_PAYLOAD_MSG_BYTES;
+
+  if (payload_len != ENROLL_PAYLOAD_TOTAL_BYTES)
+  {
+    Serial.print("Error: payload must decode to ");
+    Serial.print(ENROLL_PAYLOAD_TOTAL_BYTES);
+    Serial.println(" bytes.");
+    return false;
+  }
+
+  if (memcmp(message, ENROLL_PAYLOAD_PREFIX, ENROLL_PAYLOAD_PREFIX_BYTES) != 0)
+  {
+    Serial.println("Error: payload prefix must be 'login'.");
+    return false;
+  }
+
+  return Ed25519::verify(signature, server_pubkey, message, ENROLL_PAYLOAD_MSG_BYTES);
+}
+
 void do_fpga_ping()
 {
   ProtoFrame response = {};
@@ -462,6 +518,7 @@ void setup()
   }
   Serial.println("Commands:");
   Serial.println("*** DEBUG ONLY COMMANDS ***");
+  Serial.println("  ready");
   Serial.println("  led_on / led_off");
   Serial.println("  debug_on / debug_off");
   Serial.println("  find_valid");
@@ -497,6 +554,10 @@ void loop()
     {
       digitalWrite(led, HIGH);
       Serial.println("LED ON");
+    }
+    else if (command_str.equalsIgnoreCase("ready"))
+    {
+      Serial.println("READY");
     }
     else if (command_str.equalsIgnoreCase("led_off"))
     {
@@ -727,13 +788,19 @@ void loop()
         String cert_b64 = command_str.substring(first_space + 1, second_space);
         String payload_b64 = command_str.substring(second_space + 1);
         uint8_t cert[CERT_TOTAL_BYTES] = {0};
+        uint8_t payload[ENROLL_PAYLOAD_TOTAL_BYTES] = {0};
         size_t cert_len = 0;
-
-        (void)payload_b64;
+        size_t payload_len = 0;
 
         if (!decode_base64(cert_b64, cert, sizeof(cert), cert_len))
         {
           Serial.println("Error: Invalid cert_b64.");
+          return;
+        }
+
+        if (!decode_base64(payload_b64, payload, sizeof(payload), payload_len))
+        {
+          Serial.println("Error: Invalid payload_b64.");
           return;
         }
 
@@ -752,6 +819,13 @@ void loop()
         else if (verify_cert_locally(cert, cert_len))
         {
           Serial.println("CERT_OK");
+          print_domain_from_cert(cert);
+          print_server_pubkey_from_cert(cert);
+
+          if (verify_enroll_payload(cert, payload, payload_len))
+            Serial.println("PAYLOAD_OK");
+          else
+            Serial.println("PAYLOAD_BAD");
         }
         else
         {
