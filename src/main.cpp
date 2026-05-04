@@ -15,7 +15,15 @@ static constexpr uint8_t PROTO_MSG_ERR = 3;
 static constexpr uint8_t PROTO_CMD_PING = 1;
 static constexpr uint8_t PROTO_CMD_GET_INFO = 2;
 static constexpr uint8_t PROTO_CMD_GET_TIME = 3;
+static constexpr uint8_t PROTO_CMD_GET_CA_KEY = 4;
 static constexpr size_t PROTO_MAX_PAYLOAD = 96;
+static constexpr size_t CERT_DOMAIN_BYTES = 32;
+static constexpr size_t CERT_PK_SERVER_BYTES = 32;
+static constexpr size_t CERT_SIG_BYTES = 64;
+static constexpr size_t CERT_TOTAL_BYTES = CERT_DOMAIN_BYTES + CERT_PK_SERVER_BYTES + CERT_SIG_BYTES;
+
+static uint8_t ca_pubkey[32] = {0};
+static bool ca_pubkey_loaded = false;
 
 struct ProtoFrame
 {
@@ -223,6 +231,114 @@ void print_hex_bytes(const uint8_t *data, uint16_t len)
   }
 }
 
+int b64_value(char ch)
+{
+  if (ch >= 'A' && ch <= 'Z')
+    return ch - 'A';
+  if (ch >= 'a' && ch <= 'z')
+    return ch - 'a' + 26;
+  if (ch >= '0' && ch <= '9')
+    return ch - '0' + 52;
+  if (ch == '+')
+    return 62;
+  if (ch == '/')
+    return 63;
+  return -1;
+}
+
+bool decode_base64(const String &input, uint8_t *out, size_t out_max, size_t &out_len)
+{
+  uint32_t accum = 0;
+  uint8_t bits = 0;
+  bool saw_padding = false;
+
+  out_len = 0;
+
+  for (size_t i = 0; i < input.length(); i++)
+  {
+    char ch = input.charAt(i);
+
+    if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n')
+      continue;
+
+    if (ch == '=')
+    {
+      saw_padding = true;
+      continue;
+    }
+
+    int v = b64_value(ch);
+    if (v < 0 || saw_padding)
+      return false;
+
+    accum = (accum << 6) | static_cast<uint32_t>(v);
+    bits = static_cast<uint8_t>(bits + 6);
+
+    if (bits >= 8)
+    {
+      bits = static_cast<uint8_t>(bits - 8);
+      if (out_len >= out_max)
+        return false;
+      out[out_len++] = static_cast<uint8_t>((accum >> bits) & 0xff);
+    }
+  }
+
+  if (bits > 0)
+  {
+    uint32_t mask = (1u << bits) - 1u;
+    if ((accum & mask) != 0)
+      return false;
+  }
+
+  return true;
+}
+
+bool fetch_ca_key_from_fpga()
+{
+  ProtoFrame response = {};
+
+  if (!fpga_rpc(PROTO_CMD_GET_CA_KEY, nullptr, 0, response, 1000))
+  {
+    Serial.println("Error: failed to fetch CA key from FPGA (timeout).");
+    return false;
+  }
+
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.println("Error: FPGA returned error fetching CA key.");
+    return false;
+  }
+
+  if (response.len != 32)
+  {
+    Serial.println("Error: CA key response has invalid length.");
+    return false;
+  }
+
+  for (size_t i = 0; i < 32; i++)
+    ca_pubkey[i] = response.payload[i];
+
+  ca_pubkey_loaded = true;
+  return true;
+}
+
+bool verify_cert_locally(const uint8_t *cert, size_t cert_len)
+{
+  const uint8_t *message = cert;
+  const uint8_t *signature = cert + CERT_DOMAIN_BYTES + CERT_PK_SERVER_BYTES;
+
+  if (cert_len != CERT_TOTAL_BYTES)
+    return false;
+
+  if (!ca_pubkey_loaded)
+  {
+    Serial.println("Error: CA public key not loaded.");
+    return false;
+  }
+
+  return Ed25519::verify(signature, ca_pubkey, message, CERT_DOMAIN_BYTES + CERT_PK_SERVER_BYTES);
+}
+
 void do_fpga_ping()
 {
   ProtoFrame response = {};
@@ -339,6 +455,11 @@ void setup()
   }
 
   Serial.println("REPUSH Dongle Initialized.");
+
+  if (!fetch_ca_key_from_fpga())
+  {
+    Serial.println("Warning: could not fetch CA key from FPGA. Some features may fail.");
+  }
   Serial.println("Commands:");
   Serial.println("*** DEBUG ONLY COMMANDS ***");
   Serial.println("  led_on / led_off");
@@ -358,7 +479,7 @@ void setup()
   Serial.println("    count: number of reads (e.g., 100)");
   Serial.println("    delay: response delay in ms (e.g., 50)");
   Serial.println("*** PUFMAN <-> DONGLE COMMANDS / PRODUCTION COMMANDS ***");
-  Serial.println("  enroll ");
+  Serial.println("  enroll <cert_b64> <payload_b64>");
 }
 
 void loop()
@@ -590,6 +711,53 @@ void loop()
     else if (command_str.equalsIgnoreCase("fp_time"))
     {
       do_fpga_time();
+    }
+    else if (command_str.startsWith("enroll "))
+    {
+      int first_space = command_str.indexOf(' ');
+      int second_space = command_str.indexOf(' ', first_space + 1);
+
+      if (second_space == -1)
+      {
+        Serial.println("Error: Invalid command format.");
+        Serial.println("Expected: enroll <cert_b64> <payload_b64>");
+      }
+      else
+      {
+        String cert_b64 = command_str.substring(first_space + 1, second_space);
+        String payload_b64 = command_str.substring(second_space + 1);
+        uint8_t cert[CERT_TOTAL_BYTES] = {0};
+        size_t cert_len = 0;
+
+        (void)payload_b64;
+
+        if (!decode_base64(cert_b64, cert, sizeof(cert), cert_len))
+        {
+          Serial.println("Error: Invalid cert_b64.");
+          return;
+        }
+
+        if (cert_len != CERT_TOTAL_BYTES)
+        {
+          Serial.print("Error: cert must decode to ");
+          Serial.print(CERT_TOTAL_BYTES);
+          Serial.println(" bytes.");
+          return;
+        }
+
+        if (!ca_pubkey_loaded)
+        {
+          Serial.println("Error: CA key not available.");
+        }
+        else if (verify_cert_locally(cert, cert_len))
+        {
+          Serial.println("CERT_OK");
+        }
+        else
+        {
+          Serial.println("CERT_BAD");
+        }
+      }
     }
     else if (command_str.length() > 0)
     {
