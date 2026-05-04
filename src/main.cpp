@@ -2,6 +2,7 @@
 #include <Ed25519.h>
 #include <string.h>
 #include "puf_functions.h"
+#include "touch_keyboard.h"
 
 int led = LED_BUILTIN;
 
@@ -505,6 +506,12 @@ void setup()
   Serial1.begin(115200); // Arduino <-> FPGA
   pinMode(led, OUTPUT);
 
+  // Initialize display and touchscreen, then run calibration before
+  // waiting on USB serial so the user has something to interact with
+  // while the host establishes the CDC connection.
+  touch_kb_setup();
+  touch_kb_calibrate();
+
   while (!Serial)
   {
     delay(10);
@@ -823,7 +830,22 @@ void loop()
           print_server_pubkey_from_cert(cert);
 
           if (verify_enroll_payload(cert, payload, payload_len))
+          {
             Serial.println("PAYLOAD_OK");
+            char username[24] = {0};
+            char password[24] = {0};
+            if (touch_kb_prompt_credentials(username, sizeof(username),
+                                            password, sizeof(password)))
+            {
+              Serial.print("USERNAME: ");
+              Serial.println(username);
+              Serial.println("ENROLL_COMPLETE");
+            }
+            else
+            {
+              Serial.println("ENROLL_CANCELLED");
+            }
+          }
           else
             Serial.println("PAYLOAD_BAD");
         }
