@@ -832,18 +832,31 @@ void loop()
           if (verify_enroll_payload(cert, payload, payload_len))
           {
             Serial.println("PAYLOAD_OK");
-            char username[24] = {0};
-            char password[24] = {0};
-            if (touch_kb_prompt_credentials(username, sizeof(username),
-                                            password, sizeof(password)))
+
+            // Extract NUL-terminated domain string from the first 32 cert bytes
+            char domain[CERT_DOMAIN_BYTES + 1] = {0};
+            for (size_t i = 0; i < CERT_DOMAIN_BYTES && cert[i] != 0; i++)
+              domain[i] = static_cast<char>(cert[i]);
+
+            if (!touch_kb_confirm_login(domain))
             {
-              Serial.print("USERNAME: ");
-              Serial.println(username);
-              Serial.println("ENROLL_COMPLETE");
+              Serial.println("ENROLL_REJECTED");
             }
             else
             {
-              Serial.println("ENROLL_CANCELLED");
+              char username[24] = {0};
+              char password[24] = {0};
+              if (touch_kb_prompt_credentials(username, sizeof(username),
+                                              password, sizeof(password)))
+              {
+                Serial.print("USERNAME: ");
+                Serial.println(username);
+                Serial.println("ENROLL_COMPLETE");
+              }
+              else
+              {
+                Serial.println("ENROLL_CANCELLED");
+              }
             }
           }
           else

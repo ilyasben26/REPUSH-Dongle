@@ -6,161 +6,275 @@
 #include <XPT2046_Touchscreen.h>
 
 // Hardware pins — must match physical wiring (same as working_touch_game.ino)
-#define TKB_TFT_CS   10
-#define TKB_TFT_DC    9
-#define TKB_TFT_RST   8
-#define TKB_TS_CS     7
-#define TKB_ROTATION  3   // landscape
+#define TKB_TFT_CS 10
+#define TKB_TFT_DC 9
+#define TKB_TFT_RST 8
+#define TKB_TS_CS 7
+#define TKB_ROTATION 2 // (240 wide × 320 tall)
 
-static Adafruit_ILI9341  _tft(TKB_TFT_CS, TKB_TFT_DC, TKB_TFT_RST);
+static Adafruit_ILI9341 _tft(TKB_TFT_CS, TKB_TFT_DC, TKB_TFT_RST);
 static XPT2046_Touchscreen _ts(TKB_TS_CS);
 
-// Touch calibration coefficients (raw → screen pixel)
 static float _xM = 1.0f, _xC = 0.0f;
 static float _yM = 1.0f, _yC = 0.0f;
+static int16_t _sw = 240;
+static int16_t _sh = 320;
 
-// Screen dimensions (set after tft.begin())
-static int16_t _sw = 320;
-static int16_t _sh = 240;
-
-// ── Colors ────────────────────────────────────────────────────────────────
-static const uint16_t C_BG        = ILI9341_BLACK;
-static const uint16_t C_KEY_NRM   = 0x2945;   // dark slate-blue
-static const uint16_t C_KEY_DEL   = 0xA000;   // dark red
-static const uint16_t C_KEY_CANCEL= 0xD000;   // orange-red
-static const uint16_t C_KEY_DONE  = 0x0640;   // dark green
+// ── Colors ───────────────────────────────────────────────────────────────────
+static const uint16_t C_BG = ILI9341_BLACK;
+static const uint16_t C_KEY_NRM = 0x2945;     // dark slate-blue
+static const uint16_t C_KEY_SYMB = 0x39E7;    // slightly lighter — symbol/number keys
+static const uint16_t C_KEY_DEL = 0xA000;     // dark red
+static const uint16_t C_KEY_CANCEL = 0xD000;  // orange-red
+static const uint16_t C_KEY_DONE = 0x0640;    // dark green
 static const uint16_t C_KEY_SPACE = 0x4208;   // medium grey
+static const uint16_t C_KEY_SHIFT_A = 0x041F; // bright blue — shift active (uppercase ON)
+static const uint16_t C_KEY_PG = 0x528A;      // slate — page-switch keys
 static const uint16_t C_KEY_PRESS = ILI9341_WHITE;
-static const uint16_t C_KEY_TXT   = ILI9341_WHITE;
-static const uint16_t C_KEY_PTXT  = ILI9341_BLACK;
-static const uint16_t C_INPUT_BG  = 0x0841;   // very dark navy
+static const uint16_t C_KEY_TXT = ILI9341_WHITE;
+static const uint16_t C_KEY_PTXT = ILI9341_BLACK;
+static const uint16_t C_INPUT_BG = 0x0841; // very dark navy
 static const uint16_t C_INPUT_BDR = ILI9341_CYAN;
-static const uint16_t C_TITLE     = ILI9341_YELLOW;
+static const uint16_t C_TITLE = ILI9341_YELLOW;
 
-// ── Key layout ────────────────────────────────────────────────────────────
+// ── Layout constants (portrait 240×320) ──────────────────────────────────────
 //
-// Screen 320×240 (landscape)
-//
-//  y=0..51   — header: title label + input box
-//  y=55..88  — row 1: Q W E R T Y U I O P
-//  y=94..127 — row 2: A S D F G H J K L
-//  y=133..166— row 3: Z X C V B N M [DEL]
-//  y=172..205— row 4: [  SPACE  ] [CANCEL] [ DONE ]
+//  y =  0..65   header:  title label (y=4) + input box (y=16, h=46)
+//  y = 70..121  row 1:   10 keys
+//  y = 126..177 row 2:   10 or 9 keys (ABC uses 9)
+//  y = 182..233 row 3:   [SIDE] 7 chars [DEL]
+//  y = 238..289 row 4:   [PAGE] [SPACE] [CANCEL] [DONE]
 
-static const int16_t KEY_W  = 28;   // normal key width
-static const int16_t KEY_H  = 34;   // all key heights
-static const int16_t KEY_G  = 4;    // gap between keys
-static const int16_t DEL_W  = 44;   // DEL key width
-static const int16_t SP_W   = 128;  // SPACE key width
-static const int16_t CA_W   = 70;   // CANCEL key width
-static const int16_t DN_W   = 90;   // DONE key width
+static const int16_t SW = 240;
+static const int16_t SH = 320;
 
-static const int16_t ROW_Y[4] = { 55, 94, 133, 172 };
+static const int16_t KEY_W = 21;   // normal key width
+static const int16_t KEY_H = 52;   // all key heights
+static const int16_t KEY_G = 3;    // horizontal gap between keys
+static const int16_t ROW_GAP = 4;  // vertical gap between rows
+static const int16_t SIDE_W = 33;  // row-3 side keys: SHIFT / #+= / 123
+static const int16_t DEL_W = 33;   // DEL key (same width as SIDE)
+static const int16_t R4_PG_W = 44; // row-4 page-switch key width
+static const int16_t R4_SP_W = 93; // row-4 SPACE key width
+static const int16_t R4_CA_W = 44; // row-4 CANCEL key width
+static const int16_t R4_DN_W = 48; // row-4 DONE key width
 
-// Input area
 static const int16_t IN_BOX_X = 4;
 static const int16_t IN_BOX_Y = 16;
-static const int16_t IN_BOX_W = 312;
-static const int16_t IN_BOX_H = 34;
+static const int16_t IN_BOX_W = 232; // full width (username)
+static const int16_t IN_BOX_H = 46;
+// Password field: text box is narrower to leave room for the SHOW/HIDE button
+static const int16_t IN_PW_BOX_W = 183;
+static const int16_t IN_SHOW_X = 192; // SHOW/HIDE button left edge
+static const int16_t IN_SHOW_W = 44;  // SHOW/HIDE button width (192+44=236 ≤ 240)
 
-enum SpecialKey : uint8_t { KEY_NORM, KEY_DEL_T, KEY_CANCEL_T, KEY_DONE_T, KEY_SPACE_T };
+static const int16_t ROW1_Y = 70;
+static const int16_t ROW2_Y = ROW1_Y + KEY_H + ROW_GAP; // 126
+static const int16_t ROW3_Y = ROW2_Y + KEY_H + ROW_GAP; // 182
+static const int16_t ROW4_Y = ROW3_Y + KEY_H + ROW_GAP; // 238
 
-struct Key {
-    int16_t    x, y, w, h;
-    char       ch;
+// ── Key data ─────────────────────────────────────────────────────────────────
+enum Page : uint8_t
+{
+    PAGE_ABC,
+    PAGE_123,
+    PAGE_PLUS
+};
+
+enum SpecialKey : uint8_t
+{
+    KEY_NORM,
+    KEY_DEL_T,
+    KEY_SPACE_T,
+    KEY_DONE_T,
+    KEY_CANCEL_T,
+    KEY_SHIFT, // toggle upper/lowercase (ABC page)
+    KEY_P123,  // switch to numbers/symbols page
+    KEY_PPLUS, // switch to extended symbols page
+    KEY_PABC,  // switch back to alphabet page
+};
+
+struct Key
+{
+    int16_t x, y, w, h;
+    char ch;
     SpecialKey sp;
 };
 
-static Key    s_keys[32];
+static Key s_keys[40];
 static uint8_t s_nkeys = 0;
+static bool s_is_upper = true; // uppercase when true
 
-static const char ROW1[] = "QWERTYUIOP";
-static const char ROW2[] = "ASDFGHJKL";
-static const char ROW3[] = "ZXCVBNM";
+// ── Character sets ────────────────────────────────────────────────────────────
+static const char ABC_R1U[] = "QWERTYUIOP";
+static const char ABC_R1L[] = "qwertyuiop";
+static const char ABC_R2U[] = "ASDFGHJKL";
+static const char ABC_R2L[] = "asdfghjkl";
+static const char ABC_R3U[] = "ZXCVBNM";
+static const char ABC_R3L[] = "zxcvbnm";
 
-static void build_keys()
+static const char P123_R1[] = "1234567890";
+static const char P123_R2[] = "!@#$%^&*()";
+// Row 3 inner chars (7): period comma question exclamation apostrophe backtick underscore
+static const char P123_R3[8] = {'.', ',', '?', '!', '\'', '`', '_', '\0'};
+
+static const char PLUS_R1[11] = {'[', ']', '{', '}', '#', '%', '^', '*', '+', '=', '\0'};
+static const char PLUS_R2[11] = {'_', '\\', '|', '~', '<', '>', '(', ')', ';', ':', '\0'};
+// Row 3 inner chars (7): period comma question exclamation double-quote hyphen at-sign
+static const char PLUS_R3[8] = {'.', ',', '?', '!', '"', '-', '@', '\0'};
+
+// ── Key-table builder helpers ─────────────────────────────────────────────────
+
+static void add_row10(const char *chars, int16_t ry)
+{
+    const int16_t total = 10 * KEY_W + 9 * KEY_G; // 237
+    const int16_t sx = (SW - total) / 2;          // 1
+    for (int i = 0; i < 10; i++)
+        s_keys[s_nkeys++] = {(int16_t)(sx + i * (KEY_W + KEY_G)), ry,
+                             KEY_W, KEY_H, chars[i], KEY_NORM};
+}
+
+static void add_row9(const char *chars, int16_t ry)
+{
+    const int16_t total = 9 * KEY_W + 8 * KEY_G; // 213
+    const int16_t sx = (SW - total) / 2;         // 13
+    for (int i = 0; i < 9; i++)
+        s_keys[s_nkeys++] = {(int16_t)(sx + i * (KEY_W + KEY_G)), ry,
+                             KEY_W, KEY_H, chars[i], KEY_NORM};
+}
+
+// Row 3: [SIDE_W] + n×normal keys + [DEL_W], all centered
+static void add_row3(SpecialKey left_sp, const char *chars, int n, int16_t ry)
+{
+    const int16_t total = SIDE_W + KEY_G + n * KEY_W + (n - 1) * KEY_G + KEY_G + DEL_W; // 237
+    const int16_t sx = (SW - total) / 2;                                                // 1
+    // Left side key
+    s_keys[s_nkeys++] = {sx, ry, SIDE_W, KEY_H, 0, left_sp};
+    // Middle character keys
+    const int16_t chars_x = sx + SIDE_W + KEY_G;
+    for (int i = 0; i < n; i++)
+        s_keys[s_nkeys++] = {(int16_t)(chars_x + i * (KEY_W + KEY_G)), ry,
+                             KEY_W, KEY_H, chars[i], KEY_NORM};
+    // DEL key
+    const int16_t del_x = chars_x + n * KEY_W + (n - 1) * KEY_G + KEY_G;
+    s_keys[s_nkeys++] = {del_x, ry, DEL_W, KEY_H, 0, KEY_DEL_T};
+}
+
+// Row 4: [PAGE_SWITCH] [SPACE] [CANCEL] [DONE], all centered
+static void add_row4(SpecialKey pg_sp)
+{
+    const int16_t total = R4_PG_W + KEY_G + R4_SP_W + KEY_G + R4_CA_W + KEY_G + R4_DN_W; // 238
+    const int16_t sx = (SW - total) / 2;                                                 // 1
+    s_keys[s_nkeys++] = {sx, ROW4_Y, R4_PG_W, KEY_H, 0, pg_sp};
+    s_keys[s_nkeys++] = {(int16_t)(sx + R4_PG_W + KEY_G), ROW4_Y, R4_SP_W, KEY_H, 0, KEY_SPACE_T};
+    s_keys[s_nkeys++] = {(int16_t)(sx + R4_PG_W + KEY_G + R4_SP_W + KEY_G), ROW4_Y, R4_CA_W, KEY_H, 0, KEY_CANCEL_T};
+    s_keys[s_nkeys++] = {(int16_t)(sx + R4_PG_W + KEY_G + R4_SP_W + KEY_G + R4_CA_W + KEY_G), ROW4_Y, R4_DN_W, KEY_H, 0, KEY_DONE_T};
+}
+
+static void build_keys(Page page)
 {
     s_nkeys = 0;
-
-    // Row 1 — 10 keys, centered
+    switch (page)
     {
-        const int    n  = 10;
-        const int16_t tw = n * KEY_W + (n - 1) * KEY_G;
-        const int16_t sx = (_sw - tw) / 2;
-        for (int i = 0; i < n; i++)
-            s_keys[s_nkeys++] = { (int16_t)(sx + i * (KEY_W + KEY_G)), ROW_Y[0],
-                                  KEY_W, KEY_H, ROW1[i], KEY_NORM };
-    }
-
-    // Row 2 — 9 keys, centered
-    {
-        const int    n  = 9;
-        const int16_t tw = n * KEY_W + (n - 1) * KEY_G;
-        const int16_t sx = (_sw - tw) / 2;
-        for (int i = 0; i < n; i++)
-            s_keys[s_nkeys++] = { (int16_t)(sx + i * (KEY_W + KEY_G)), ROW_Y[1],
-                                  KEY_W, KEY_H, ROW2[i], KEY_NORM };
-    }
-
-    // Row 3 — 7 letter keys + wide DEL key, centered as a unit
-    {
-        const int    n  = 7;
-        // total = 7 keys + 6 inner gaps + 1 gap before DEL + DEL
-        const int16_t tw = n * KEY_W + (n - 1) * KEY_G + KEY_G + DEL_W;
-        const int16_t sx = (_sw - tw) / 2;
-        for (int i = 0; i < n; i++)
-            s_keys[s_nkeys++] = { (int16_t)(sx + i * (KEY_W + KEY_G)), ROW_Y[2],
-                                  KEY_W, KEY_H, ROW3[i], KEY_NORM };
-        // DEL immediately after M with one gap
-        const int16_t del_x = sx + n * (KEY_W + KEY_G);
-        s_keys[s_nkeys++] = { del_x, ROW_Y[2], DEL_W, KEY_H, 0, KEY_DEL_T };
-    }
-
-    // Row 4 — SPACE + CANCEL + DONE, centered
-    {
-        const int16_t tw = SP_W + KEY_G + CA_W + KEY_G + DN_W;
-        const int16_t sx = (_sw - tw) / 2;
-        s_keys[s_nkeys++] = { sx,                               ROW_Y[3], SP_W, KEY_H, 0, KEY_SPACE_T  };
-        s_keys[s_nkeys++] = { (int16_t)(sx + SP_W + KEY_G),    ROW_Y[3], CA_W, KEY_H, 0, KEY_CANCEL_T };
-        s_keys[s_nkeys++] = { (int16_t)(sx + SP_W + KEY_G + CA_W + KEY_G), ROW_Y[3], DN_W, KEY_H, 0, KEY_DONE_T };
+    case PAGE_ABC:
+        add_row10(s_is_upper ? ABC_R1U : ABC_R1L, ROW1_Y);
+        add_row9(s_is_upper ? ABC_R2U : ABC_R2L, ROW2_Y);
+        add_row3(KEY_SHIFT, s_is_upper ? ABC_R3U : ABC_R3L, 7, ROW3_Y);
+        add_row4(KEY_P123);
+        break;
+    case PAGE_123:
+        add_row10(P123_R1, ROW1_Y);
+        add_row10(P123_R2, ROW2_Y);
+        add_row3(KEY_PPLUS, P123_R3, 7, ROW3_Y);
+        add_row4(KEY_PABC);
+        break;
+    case PAGE_PLUS:
+        add_row10(PLUS_R1, ROW1_Y);
+        add_row10(PLUS_R2, ROW2_Y);
+        add_row3(KEY_P123, PLUS_R3, 7, ROW3_Y);
+        add_row4(KEY_PABC);
+        break;
     }
 }
 
-// ── Drawing helpers ───────────────────────────────────────────────────────
+// ── Drawing helpers ───────────────────────────────────────────────────────────
 
 static uint16_t key_bg(const Key &k, bool pressed)
 {
-    if (pressed) return C_KEY_PRESS;
-    switch (k.sp) {
-        case KEY_DEL_T:    return C_KEY_DEL;
-        case KEY_CANCEL_T: return C_KEY_CANCEL;
-        case KEY_DONE_T:   return C_KEY_DONE;
-        case KEY_SPACE_T:  return C_KEY_SPACE;
-        default:           return C_KEY_NRM;
+    if (pressed)
+        return C_KEY_PRESS;
+    switch (k.sp)
+    {
+    case KEY_DEL_T:
+        return C_KEY_DEL;
+    case KEY_CANCEL_T:
+        return C_KEY_CANCEL;
+    case KEY_DONE_T:
+        return C_KEY_DONE;
+    case KEY_SPACE_T:
+        return C_KEY_SPACE;
+    case KEY_SHIFT:
+        return s_is_upper ? C_KEY_SHIFT_A : C_KEY_NRM;
+    case KEY_P123:
+    case KEY_PPLUS:
+    case KEY_PABC:
+        return C_KEY_PG;
+    default:
+        return C_KEY_NRM;
     }
 }
 
 static void draw_key(uint8_t i, bool pressed)
 {
-    const Key &k  = s_keys[i];
-    uint16_t   bg = key_bg(k, pressed);
-    uint16_t   fg = pressed ? C_KEY_PTXT : C_KEY_TXT;
+    const Key &k = s_keys[i];
+    uint16_t bg = key_bg(k, pressed);
+    uint16_t fg = pressed ? C_KEY_PTXT : C_KEY_TXT;
 
     _tft.fillRoundRect(k.x, k.y, k.w, k.h, 4, bg);
     _tft.drawRoundRect(k.x, k.y, k.w, k.h, 4, ILI9341_WHITE);
     _tft.setTextColor(fg);
 
-    if (k.sp == KEY_NORM) {
-        // Single letter at textSize 2 (char 12×16), centered in key
+    if (k.sp == KEY_NORM)
+    {
+        // Single char, textSize 2 (12×16 px), centered
         _tft.setTextSize(2);
         _tft.setCursor(k.x + (k.w - 12) / 2, k.y + (k.h - 16) / 2);
         _tft.print(k.ch);
-    } else {
-        // Multi-char label at textSize 1 (char 6×8), centered in key
-        const char *lbl =
-            (k.sp == KEY_DEL_T)    ? "DEL"    :
-            (k.sp == KEY_CANCEL_T) ? "CANCEL" :
-            (k.sp == KEY_DONE_T)   ? "DONE"   : "SPACE";
+    }
+    else
+    {
+        // Label string, textSize 1 (6×8 px per char), centered
+        const char *lbl;
+        switch (k.sp)
+        {
+        case KEY_DEL_T:
+            lbl = "DEL";
+            break;
+        case KEY_CANCEL_T:
+            lbl = "CANCEL";
+            break;
+        case KEY_DONE_T:
+            lbl = "DONE";
+            break;
+        case KEY_SPACE_T:
+            lbl = "SPACE";
+            break;
+        case KEY_SHIFT:
+            lbl = "SH";
+            break; // background color shows state
+        case KEY_P123:
+            lbl = "123";
+            break;
+        case KEY_PPLUS:
+            lbl = "#+=";
+            break;
+        case KEY_PABC:
+            lbl = "ABC";
+            break;
+        default:
+            lbl = "?";
+            break;
+        }
         int16_t lw = (int16_t)(strlen(lbl) * 6);
         _tft.setTextSize(1);
         _tft.setCursor(k.x + (k.w - lw) / 2, k.y + (k.h - 8) / 2);
@@ -174,51 +288,78 @@ static void draw_all_keys()
         draw_key(i, false);
 }
 
-static void draw_header(bool is_pw, const char *buf)
+// show_pw: only relevant when is_pw=true; true = display plaintext, false = asterisks
+static void draw_header(bool is_pw, const char *buf, bool show_pw)
 {
-    // Clear only the header area to avoid flickering the keyboard
-    _tft.fillRect(0, 0, _sw, ROW_Y[0] - 3, C_BG);
+    // Repaint only the header area to avoid flickering the keyboard
+    _tft.fillRect(0, 0, SW, ROW1_Y - 3, C_BG);
 
     _tft.setCursor(IN_BOX_X, 4);
     _tft.setTextSize(1);
     _tft.setTextColor(C_TITLE);
     _tft.print(is_pw ? "ENTER PASSWORD:" : "ENTER USERNAME:");
 
-    _tft.fillRect(IN_BOX_X, IN_BOX_Y, IN_BOX_W, IN_BOX_H, C_INPUT_BG);
-    _tft.drawRect(IN_BOX_X, IN_BOX_Y, IN_BOX_W, IN_BOX_H, C_INPUT_BDR);
+    // For password fields the text box is narrower (SHOW/HIDE button fills the gap)
+    int16_t box_w = (is_pw) ? IN_PW_BOX_W : IN_BOX_W;
+    _tft.fillRect(IN_BOX_X, IN_BOX_Y, box_w, IN_BOX_H, C_INPUT_BG);
+    _tft.drawRect(IN_BOX_X, IN_BOX_Y, box_w, IN_BOX_H, C_INPUT_BDR);
 
+    // Text: vertically centered in box; textSize 2 (charH=16)
     _tft.setTextSize(2);
     _tft.setTextColor(ILI9341_WHITE);
-    // Center text vertically in the box (charH=16 at size 2)
     _tft.setCursor(IN_BOX_X + 4, IN_BOX_Y + (IN_BOX_H - 16) / 2);
 
     const size_t len = strlen(buf);
-    if (is_pw) {
-        for (size_t j = 0; j < len; j++) _tft.print('*');
-    } else {
+    if (is_pw && !show_pw)
+    {
+        for (size_t j = 0; j < len; j++)
+            _tft.print('*');
+    }
+    else
+    {
         _tft.print(buf);
     }
-    _tft.print('_');  // static cursor
+    _tft.print('_'); // static cursor marker
+
+    // SHOW / HIDE toggle button (password field only)
+    if (is_pw)
+    {
+        uint16_t btn_bg = show_pw ? C_KEY_SHIFT_A : C_KEY_NRM;
+        const char *lbl = show_pw ? "HIDE" : "SHOW";
+        _tft.fillRoundRect(IN_SHOW_X, IN_BOX_Y, IN_SHOW_W, IN_BOX_H, 4, btn_bg);
+        _tft.drawRoundRect(IN_SHOW_X, IN_BOX_Y, IN_SHOW_W, IN_BOX_H, 4, C_INPUT_BDR);
+        int16_t lw = (int16_t)(strlen(lbl) * 6);
+        _tft.setTextSize(1);
+        _tft.setTextColor(ILI9341_WHITE);
+        _tft.setCursor(IN_SHOW_X + (IN_SHOW_W - lw) / 2, IN_BOX_Y + (IN_BOX_H - 8) / 2);
+        _tft.print(lbl);
+    }
 }
 
-// ── Touch helpers ─────────────────────────────────────────────────────────
+// ── Touch helpers ─────────────────────────────────────────────────────────────
 
 static bool touch_xy(int16_t &sx, int16_t &sy)
 {
-    if (!_ts.touched()) return false;
+    if (!_ts.touched())
+        return false;
     TS_Point p = _ts.getPoint();
     sx = (int16_t)((float)p.x * _xM + _xC);
     sy = (int16_t)((float)p.y * _yM + _yC);
-    if (sx < 0)    sx = 0;
-    if (sx >= _sw) sx = _sw - 1;
-    if (sy < 0)    sy = 0;
-    if (sy >= _sh) sy = _sh - 1;
+    if (sx < 0)
+        sx = 0;
+    if (sx >= _sw)
+        sx = _sw - 1;
+    if (sy < 0)
+        sy = 0;
+    if (sy >= _sh)
+        sy = _sh - 1;
     return true;
 }
 
 static int8_t hit_test(int16_t sx, int16_t sy)
 {
-    for (uint8_t i = 0; i < s_nkeys; i++) {
+    for (uint8_t i = 0; i < s_nkeys; i++)
+    {
         const Key &k = s_keys[i];
         if (sx >= k.x && sx < k.x + k.w && sy >= k.y && sy < k.y + k.h)
             return (int8_t)i;
@@ -226,36 +367,55 @@ static int8_t hit_test(int16_t sx, int16_t sy)
     return -1;
 }
 
-// ── Single-field prompt loop ──────────────────────────────────────────────
+// ── Single-field prompt ───────────────────────────────────────────────────────
 
-// Runs the keyboard for one field (username or password).
-// Returns true on DONE, false on CANCEL.
+// Runs the keyboard for one field. Returns true (DONE) or false (CANCEL).
 static bool run_field(bool is_pw, char *buf, size_t maxlen)
 {
     size_t len = 0;
     buf[0] = '\0';
+    Page cur_page = PAGE_ABC;
+    s_is_upper = true;    // start each field in uppercase
+    bool show_pw = false; // password visibility (ignored for username field)
 
-    draw_header(is_pw, buf);
+    build_keys(cur_page);
+    draw_header(is_pw, buf, show_pw);
     draw_all_keys();
 
     bool prev_touched = false;
 
-    for (;;) {
+    for (;;)
+    {
         int16_t sx, sy;
         bool now_touched = touch_xy(sx, sy);
 
-        // Only act on the rising edge of a touch
-        if (now_touched && !prev_touched) {
-            int8_t ki = hit_test(sx, sy);
-            if (ki >= 0) {
-                const Key &k = s_keys[ki];
+        // Act only on the rising edge of a touch
+        if (now_touched && !prev_touched)
+        {
+            // Check SHOW/HIDE button first (password fields only)
+            if (is_pw &&
+                sx >= IN_SHOW_X && sx < IN_SHOW_X + IN_SHOW_W &&
+                sy >= IN_BOX_Y && sy < IN_BOX_Y + IN_BOX_H)
+            {
+                show_pw = !show_pw;
+                draw_header(is_pw, buf, show_pw);
+            }
+            else
+            {
+                int8_t ki = hit_test(sx, sy);
+                if (ki >= 0)
+                {
+                    const Key &k = s_keys[ki];
 
-                // Brief visual press feedback
-                draw_key((uint8_t)ki, true);
-                delay(80);
-                draw_key((uint8_t)ki, false);
+                    // Visual press feedback
+                    draw_key((uint8_t)ki, true);
+                    delay(80);
+                    draw_key((uint8_t)ki, false);
 
-                switch (k.sp) {
+                    bool need_rebuild = false;
+
+                    switch (k.sp)
+                    {
                     case KEY_DONE_T:
                         return true;
 
@@ -263,16 +423,60 @@ static bool run_field(bool is_pw, char *buf, size_t maxlen)
                         return false;
 
                     case KEY_DEL_T:
-                        if (len > 0) { buf[--len] = '\0'; draw_header(is_pw, buf); }
+                        if (len > 0)
+                        {
+                            buf[--len] = '\0';
+                            draw_header(is_pw, buf, show_pw);
+                        }
                         break;
 
                     case KEY_SPACE_T:
-                        if (len + 1 < maxlen) { buf[len++] = ' '; buf[len] = '\0'; draw_header(is_pw, buf); }
+                        if (len + 1 < maxlen)
+                        {
+                            buf[len++] = ' ';
+                            buf[len] = '\0';
+                            draw_header(is_pw, buf, show_pw);
+                        }
                         break;
 
-                    default: // KEY_NORM
-                        if (len + 1 < maxlen) { buf[len++] = k.ch; buf[len] = '\0'; draw_header(is_pw, buf); }
+                    case KEY_SHIFT:
+                        s_is_upper = !s_is_upper;
+                        need_rebuild = true;
                         break;
+
+                    case KEY_P123:
+                        cur_page = PAGE_123;
+                        need_rebuild = true;
+                        break;
+
+                    case KEY_PPLUS:
+                        cur_page = PAGE_PLUS;
+                        need_rebuild = true;
+                        break;
+
+                    case KEY_PABC:
+                        cur_page = PAGE_ABC;
+                        need_rebuild = true;
+                        break;
+
+                    default: // KEY_NORM — regular character
+                        if (len + 1 < maxlen)
+                        {
+                            buf[len++] = k.ch;
+                            buf[len] = '\0';
+                            draw_header(is_pw, buf, show_pw);
+                        }
+                        break;
+                    }
+
+                    if (need_rebuild)
+                    {
+                        // Clear the full keyboard area first so leftover keys from
+                        // rows with different key counts don't bleed through.
+                        _tft.fillRect(0, ROW1_Y, _sw, ROW4_Y + KEY_H - ROW1_Y, C_BG);
+                        build_keys(cur_page);
+                        draw_all_keys();
+                    }
                 }
             }
         }
@@ -282,80 +486,212 @@ static bool run_field(bool is_pw, char *buf, size_t maxlen)
     }
 }
 
-// ── Public API ────────────────────────────────────────────────────────────
+// ── Public API ────────────────────────────────────────────────────────────────
 
 void touch_kb_setup()
 {
-    // Drive CS lines high before begin() to avoid SPI bus contention
-    pinMode(TKB_TS_CS,  OUTPUT); digitalWrite(TKB_TS_CS,  HIGH);
-    pinMode(TKB_TFT_CS, OUTPUT); digitalWrite(TKB_TFT_CS, HIGH);
+    // De-assert all SPI CS lines before calling begin() to avoid bus contention
+    pinMode(TKB_TS_CS, OUTPUT);
+    digitalWrite(TKB_TS_CS, HIGH);
+    pinMode(TKB_TFT_CS, OUTPUT);
+    digitalWrite(TKB_TFT_CS, HIGH);
 
     _tft.begin();
     _tft.setRotation(TKB_ROTATION);
     _tft.fillScreen(C_BG);
-    _sw = _tft.width();
-    _sh = _tft.height();
+    _sw = _tft.width();  // 240 in portrait
+    _sh = _tft.height(); // 320 in portrait
 
     _ts.begin();
     _ts.setRotation(TKB_ROTATION);
-
-    build_keys();
 }
 
 void touch_kb_calibrate()
 {
     TS_Point p;
-    int16_t  x1, y1, x2, y2;
+    int16_t x1, y1, x2, y2;
 
     _tft.fillScreen(ILI9341_BLACK);
-    while (_ts.touched());  // wait for no touch
+    while (_ts.touched())
+        ; // wait until no finger on screen
 
-    // ── Crosshair 1: top-left ────────────────────────────────────────────
+    // ── Crosshair 1: top-left corner ─────────────────────────────────────────
     _tft.drawFastHLine(10, 20, 20, ILI9341_RED);
     _tft.drawFastVLine(20, 10, 20, ILI9341_RED);
     _tft.setCursor(38, 14);
     _tft.setTextSize(1);
     _tft.setTextColor(ILI9341_WHITE);
-    _tft.print("Touch crosshair to calibrate");
-    while (!_ts.touched());
-    p = _ts.getPoint(); x1 = p.x; y1 = p.y;
+    _tft.print("Touch to calibrate");
+    while (!_ts.touched())
+        ;
+    p = _ts.getPoint();
+    x1 = p.x;
+    y1 = p.y;
     _tft.fillScreen(ILI9341_BLACK);
     delay(500);
-    while (_ts.touched());
+    while (_ts.touched())
+        ;
 
-    // ── Crosshair 2: bottom-right ─────────────────────────────────────────
+    // ── Crosshair 2: bottom-right corner ─────────────────────────────────────
     _tft.drawFastHLine(_sw - 30, _sh - 20, 20, ILI9341_RED);
     _tft.drawFastVLine(_sw - 20, _sh - 30, 20, ILI9341_RED);
-    _tft.setCursor(_sw - 190, _sh - 35);
+    _tft.setCursor(4, _sh - 35);
     _tft.setTextSize(1);
     _tft.setTextColor(ILI9341_WHITE);
-    _tft.print("Touch crosshair to calibrate");
-    while (!_ts.touched());
-    p = _ts.getPoint(); x2 = p.x; y2 = p.y;
+    _tft.print("Touch to calibrate");
+    while (!_ts.touched())
+        ;
+    p = _ts.getPoint();
+    x2 = p.x;
+    y2 = p.y;
     _tft.fillScreen(ILI9341_BLACK);
     delay(500);
-    while (_ts.touched());
+    while (_ts.touched())
+        ;
 
-    // Compute linear calibration coefficients: screen_coord = raw * M + C
+    // Compute linear map: screen_coord = raw * M + C
     _xM = (float)(_sw - 40) / (float)(x2 - x1);
     _xC = 20.0f - (float)x1 * _xM;
     _yM = (float)(_sh - 40) / (float)(y2 - y1);
     _yC = 20.0f - (float)y1 * _yM;
 }
 
-bool touch_kb_prompt_credentials(char *username, size_t username_max,
-                                  char *password, size_t password_max)
+bool touch_kb_confirm_login(const char *domain)
 {
     _tft.fillScreen(C_BG);
 
-    if (!run_field(false, username, username_max)) {
+    // ── Title ─────────────────────────────────────────────────────────────────
+    _tft.setTextColor(C_TITLE);
+    _tft.setTextSize(2);
+    // "LOGIN REQUEST" = 13 chars × 12 px = 156 px  →  center x = (240-156)/2 = 42
+    _tft.setCursor(42, 10);
+    _tft.print("LOGIN REQUEST");
+    _tft.drawFastHLine(0, 30, _sw, 0x4208); // subtle divider
+
+    // ── Subtitle ──────────────────────────────────────────────────────────────
+    _tft.setTextColor(ILI9341_WHITE);
+    _tft.setTextSize(1);
+    _tft.setCursor(10, 38);
+    _tft.print("Login request from:");
+
+    // ── Domain box ────────────────────────────────────────────────────────────
+    _tft.fillRect(10, 50, 220, 46, C_INPUT_BG);
+    _tft.drawRect(10, 50, 220, 46, C_INPUT_BDR);
+
+    const char *disp = (strlen(domain) > 0) ? domain : "<unknown>";
+    size_t dlen = strlen(disp);
+    _tft.setTextColor(ILI9341_CYAN);
+    if (dlen <= 17)
+    {
+        // Fits at textSize 2 (max 17 × 12 = 204 px in 212 px usable)
+        _tft.setTextSize(2);
+        int16_t dx = 10 + (220 - (int16_t)(dlen * 12)) / 2;
+        _tft.setCursor(dx, 50 + (46 - 16) / 2);
+    }
+    else
+    {
+        // Fall back to textSize 1 (max 35 × 6 = 210 px; cert domain ≤ 32 chars)
+        _tft.setTextSize(1);
+        int16_t dx = 10 + (220 - (int16_t)(dlen * 6)) / 2;
+        if (dx < 14)
+            dx = 14;
+        _tft.setCursor(dx, 50 + (46 - 8) / 2);
+    }
+    _tft.print(disp);
+
+    // ── Warning text ──────────────────────────────────────────────────────────
+    _tft.setTextColor(ILI9341_WHITE);
+    _tft.setTextSize(1);
+    _tft.setCursor(10, 108);
+    _tft.print("Verify the domain above.");
+    _tft.setCursor(10, 120);
+    _tft.print("Reject if you did not");
+    _tft.setCursor(10, 132);
+    _tft.print("initiate this request.");
+    _tft.drawFastHLine(0, 150, _sw, 0x4208); // subtle divider
+
+    // ── Buttons ───────────────────────────────────────────────────────────────
+    const int16_t BTN_X = 20;
+    const int16_t BTN_W = 200;
+    const int16_t BTN_H = 62;
+    const int16_t ACCEPT_Y = 162;
+    const int16_t REJECT_Y = 234;
+    // "ACCEPT" / "REJECT" = 6 chars × 12 px = 72 px at textSize 2
+    const int16_t LBL_OFFSET = (BTN_W - 72) / 2; // 64
+
+    _tft.fillRoundRect(BTN_X, ACCEPT_Y, BTN_W, BTN_H, 8, C_KEY_DONE);
+    _tft.drawRoundRect(BTN_X, ACCEPT_Y, BTN_W, BTN_H, 8, ILI9341_WHITE);
+    _tft.setTextColor(ILI9341_WHITE);
+    _tft.setTextSize(2);
+    _tft.setCursor(BTN_X + LBL_OFFSET, ACCEPT_Y + (BTN_H - 16) / 2);
+    _tft.print("ACCEPT");
+
+    _tft.fillRoundRect(BTN_X, REJECT_Y, BTN_W, BTN_H, 8, C_KEY_DEL);
+    _tft.drawRoundRect(BTN_X, REJECT_Y, BTN_W, BTN_H, 8, ILI9341_WHITE);
+    _tft.setTextColor(ILI9341_WHITE);
+    _tft.setTextSize(2);
+    _tft.setCursor(BTN_X + LBL_OFFSET, REJECT_Y + (BTN_H - 16) / 2);
+    _tft.print("REJECT");
+
+    // ── Wait for decision ─────────────────────────────────────────────────────
+    while (_ts.touched())
+        ; // flush any residual touch
+
+    bool prev_touched = false;
+    for (;;)
+    {
+        int16_t sx, sy;
+        bool now_touched = touch_xy(sx, sy);
+
+        if (now_touched && !prev_touched && sx >= BTN_X && sx < BTN_X + BTN_W)
+        {
+            bool accepted = false;
+            bool hit = false;
+
+            if (sy >= ACCEPT_Y && sy < ACCEPT_Y + BTN_H)
+            {
+                accepted = true;
+                hit = true;
+            }
+            if (sy >= REJECT_Y && sy < REJECT_Y + BTN_H)
+            {
+                accepted = false;
+                hit = true;
+            }
+
+            if (hit)
+            {
+                // Flash the pressed button white
+                int16_t fy = accepted ? ACCEPT_Y : REJECT_Y;
+                _tft.fillRoundRect(BTN_X, fy, BTN_W, BTN_H, 8, C_KEY_PRESS);
+                delay(80);
+                while (_ts.touched())
+                    ;
+                _tft.fillScreen(C_BG);
+                return accepted;
+            }
+        }
+
+        prev_touched = now_touched;
+        delay(20);
+    }
+}
+
+bool touch_kb_prompt_credentials(char *username, size_t username_max,
+                                 char *password, size_t password_max)
+{
+    _tft.fillScreen(C_BG);
+
+    if (!run_field(false, username, username_max))
+    {
         _tft.fillScreen(C_BG);
         return false;
     }
 
     _tft.fillScreen(C_BG);
 
-    if (!run_field(true, password, password_max)) {
+    if (!run_field(true, password, password_max))
+    {
         _tft.fillScreen(C_BG);
         return false;
     }
@@ -364,7 +700,8 @@ bool touch_kb_prompt_credentials(char *username, size_t username_max,
     _tft.fillScreen(C_BG);
     _tft.setTextColor(ILI9341_GREEN);
     _tft.setTextSize(2);
-    _tft.setCursor(20, 108);
+    int16_t tx = 20, ty = (_sh - 16) / 2;
+    _tft.setCursor(tx, ty);
     _tft.print("Credentials received!");
     delay(2000);
     _tft.fillScreen(C_BG);
