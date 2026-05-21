@@ -26,7 +26,9 @@ static constexpr uint8_t PROTO_CMD_PUF_RECONFIGURE_STATE = 6;
 static constexpr uint8_t PROTO_CMD_PUF_CHALLENGE_LR      = 7;
 static constexpr uint8_t PROTO_CMD_PUF_SET_DOMAIN        = 8;
 static constexpr uint8_t PROTO_CMD_PUF_STORE_ENROLLMENT  = 9;
-static constexpr uint8_t PROTO_CMD_PUF_SAVE_STATES       = 10;
+static constexpr uint8_t PROTO_CMD_PUF_SAVE_STATES           = 10;
+static constexpr uint8_t PROTO_CMD_PUF_FIND_STATE_BY_DOMAIN  = 11;
+static constexpr uint8_t PROTO_CMD_PUF_MARK_ACKNOWLEDGED     = 12;
 static constexpr size_t PROTO_MAX_PAYLOAD = 96;
 static constexpr size_t CERT_DOMAIN_BYTES = 32;
 static constexpr size_t CERT_PK_SERVER_BYTES = 32;
@@ -323,6 +325,55 @@ static void fill_random(uint8_t *buf, size_t len)
   }
 }
 
+bool fpga_puf_find_state_by_domain(const char *domain,
+                                    uint8_t &state_index,
+                                    uint8_t pubkey[32],
+                                    uint8_t challenge_raw[16],
+                                    uint8_t pk_server[32])
+{
+  ProtoFrame response = {};
+  size_t dlen = strlen(domain);
+  if (dlen > 63) dlen = 63;
+  if (!fpga_rpc(PROTO_CMD_PUF_FIND_STATE_BY_DOMAIN,
+                reinterpret_cast<const uint8_t *>(domain),
+                static_cast<uint16_t>(dlen), response, 2000))
+  {
+    Serial.println("Error: fpga_puf_find_state_by_domain timeout.");
+    return false;
+  }
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.println("Error: domain not found on FPGA.");
+    return false;
+  }
+  if (response.len < 81)
+  {
+    Serial.println("Error: fpga_puf_find_state_by_domain short response.");
+    return false;
+  }
+  state_index = response.payload[0];
+  memcpy(pubkey,        response.payload + 1,  32);
+  memcpy(challenge_raw, response.payload + 33, 16);
+  memcpy(pk_server,     response.payload + 49, 32);
+  return true;
+}
+
+bool fpga_puf_mark_acknowledged(uint8_t state_index)
+{
+  ProtoFrame response = {};
+  if (!fpga_rpc(PROTO_CMD_PUF_MARK_ACKNOWLEDGED, &state_index, 1, response, 3000))
+  {
+    Serial.println("Error: fpga_puf_mark_acknowledged timeout.");
+    return false;
+  }
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.println("Error: FPGA failed to mark acknowledged.");
+    return false;
+  }
+  return true;
+}
+
 // GF(2^255-19) field arithmetic for Ed25519 public key -> X25519 public key conversion.
 // Algorithm: u = (1+y) / (1-y) mod p  (birational map Edwards -> Montgomery)
 // Uses TweetNaCl-style 16-limb representation (16 x 16-bit limbs, int64_t for overflow headroom).
@@ -536,13 +587,15 @@ bool fpga_puf_set_domain(uint8_t state_index, const char *domain)
 
 bool fpga_puf_store_enrollment(uint8_t state_index,
                                const uint8_t pubkey[32],
-                               const uint8_t challenge_raw[16])
+                               const uint8_t challenge_raw[16],
+                               const uint8_t pk_server[32])
 {
-  uint8_t req[49];
+  uint8_t req[81];
   ProtoFrame response = {};
   req[0] = state_index;
-  memcpy(req + 1, pubkey, 32);
+  memcpy(req + 1,  pubkey,        32);
   memcpy(req + 33, challenge_raw, 16);
+  memcpy(req + 49, pk_server,     32);
   if (!fpga_rpc(PROTO_CMD_PUF_STORE_ENROLLMENT, req, sizeof(req), response, 2000))
   {
     Serial.println("Error: fpga_puf_store_enrollment timeout.");
@@ -785,6 +838,7 @@ void setup()
   Serial.println("    delay: response delay in ms (e.g., 50)");
   Serial.println("*** PUFMAN <-> DONGLE COMMANDS / PRODUCTION COMMANDS ***");
   Serial.println("  enroll <cert_b64> <payload_b64>");
+  Serial.println("  acknowledge <domain> <sig_b64>");
 }
 
 void loop()
@@ -1127,7 +1181,8 @@ void loop()
 
                 // Step 6: persist enrollment record on FPGA SD card (acknowledged = 0)
                 if (!fpga_puf_set_domain(state_index, domain) ||
-                    !fpga_puf_store_enrollment(state_index, device_pubkey, &payload[5]) ||
+                    !fpga_puf_store_enrollment(state_index, device_pubkey,
+                                               &payload[5], cert + CERT_DOMAIN_BYTES) ||
                     !fpga_puf_save_states())
                 {
                   Serial.println("ENROLL_ERROR: failed to persist state on FPGA");
@@ -1243,6 +1298,64 @@ void loop()
         else
         {
           Serial.println("CERT_BAD");
+        }
+      }
+    }
+    else if (command_str.startsWith("acknowledge "))
+    {
+      int first_space  = command_str.indexOf(' ');
+      int second_space = command_str.indexOf(' ', first_space + 1);
+
+      if (second_space == -1)
+      {
+        Serial.println("Error: Invalid command format.");
+        Serial.println("Expected: acknowledge <domain> <sig_b64>");
+      }
+      else
+      {
+        String domain_str = command_str.substring(first_space + 1, second_space);
+        String sig_b64    = command_str.substring(second_space + 1);
+
+        uint8_t sig[64];
+        size_t sig_len = 0;
+        if (!decode_base64(sig_b64, sig, sizeof(sig), sig_len) || sig_len != 64)
+        {
+          Serial.println("ACK_BAD: sig_b64 must decode to exactly 64 bytes.");
+        }
+        else
+        {
+          uint8_t state_index = 0;
+          uint8_t ack_pubkey[32], ack_challenge[16], ack_pk_server[32];
+          if (!fpga_puf_find_state_by_domain(domain_str.c_str(), state_index,
+                                             ack_pubkey, ack_challenge, ack_pk_server))
+          {
+            Serial.println("ACK_BAD: domain not enrolled on this device.");
+          }
+          else
+          {
+            // Build the 80-byte message the server signed:
+            //   device_pubkey(32) || challenge_raw(16) || domain_padded(32)
+            uint8_t ack_msg[80];
+            memcpy(ack_msg,      ack_pubkey,   32);
+            memcpy(ack_msg + 32, ack_challenge, 16);
+            memset(ack_msg + 48, 0, 32);
+            size_t dlen = domain_str.length();
+            if (dlen > 32) dlen = 32;
+            memcpy(ack_msg + 48, domain_str.c_str(), dlen);
+
+            if (!Ed25519::verify(sig, ack_pk_server, ack_msg, sizeof(ack_msg)))
+            {
+              Serial.println("ACK_BAD: signature verification failed.");
+            }
+            else if (!fpga_puf_mark_acknowledged(state_index))
+            {
+              Serial.println("ACK_BAD: failed to persist acknowledgement on FPGA.");
+            }
+            else
+            {
+              Serial.println("ACK_OK");
+            }
+          }
         }
       }
     }

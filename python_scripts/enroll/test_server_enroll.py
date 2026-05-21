@@ -187,15 +187,31 @@ def verify_device_signature(payload: bytes,
 
 # ── Serial communication ──────────────────────────────────────────────────────
 
+def create_ack_signature(server_seed: bytes, device_pubkey_hex: str,
+                          challenge: bytes, domain: str) -> bytes:
+    """
+    Build the 80-byte acknowledgement message and sign it with SK_Server.
+
+    Message = device_pubkey(32) || challenge_raw(16) || domain_zero_padded(32)
+
+    The dongle verifies this with PK_Server to mark the enrollment as confirmed.
+    """
+    device_pubkey  = bytes.fromhex(device_pubkey_hex)
+    domain_padded  = domain.encode() + b"\x00" * (32 - len(domain.encode()))
+    ack_message    = device_pubkey + challenge + domain_padded   # 80 bytes
+    sk = ed25519.Ed25519PrivateKey.from_private_bytes(server_seed[:32])
+    return sk.sign(ack_message)   # 64-byte signature
+
+
 def send_and_collect(port: str, command: str, timeout_s: float = 120.0) -> list[str]:
     """
-    Send one line to the Arduino and collect all output until ENROLL_COMPLETE,
-    ENROLL_CANCELLED, ENROLL_REJECTED, CERT_BAD, PAYLOAD_BAD, or timeout.
-    Lines are printed to stdout as they arrive.
+    Send one line to the Arduino and collect all output until a terminal token
+    or timeout.  Lines are printed to stdout as they arrive.
     """
     terminal_tokens = {
         "ENROLL_COMPLETE", "ENROLL_CANCELLED", "ENROLL_REJECTED",
         "CERT_BAD", "PAYLOAD_BAD", "ENROLL_ERROR",
+        "ACK_OK", "ACK_BAD",
     }
 
     lines = []
@@ -362,6 +378,40 @@ def main():
     print()
     print("=" * 60)
     print("  ENROLLMENT TEST PASSED")
+    print("=" * 60)
+    print(f"  Domain  : {args.domain}")
+    print(f"  Username: {decrypted['username']}")
+    print(f"  Device PK: {decrypted['device_pubkey_hex']}")
+    print("=" * 60)
+
+    # ── Step 4: send acknowledgement ─────────────────────────────────────────
+    print()
+    print("[*] Generating acknowledgement signature...")
+    ack_sig = create_ack_signature(
+        server_seed,
+        decrypted["device_pubkey_hex"],
+        challenge,          # 16-byte PUF challenge from the enrollment payload
+        args.domain,
+    )
+    ack_sig_b64 = base64.b64encode(ack_sig).decode()
+    print(f"[*] Ack sig ({len(ack_sig)} bytes): {ack_sig.hex()[:32]}...")
+
+    ack_command = f"acknowledge {args.domain} {ack_sig_b64}"
+    print()
+    print("[*] Sending acknowledgement to dongle...")
+    ack_lines = send_and_collect(args.port, ack_command, timeout_s=15.0)
+    ack_output = "\n".join(ack_lines)
+
+    if "ACK_OK" in ack_output:
+        print("[+] Acknowledgement accepted — enrollment is now confirmed on device.")
+    else:
+        reason = next((l for l in ack_lines if "ACK_BAD" in l), "no ACK_OK received")
+        print(f"[FAIL] Acknowledgement rejected: {reason}", file=sys.stderr)
+        sys.exit(1)
+
+    print()
+    print("=" * 60)
+    print("  ENROLLMENT COMPLETE — DEVICE ACKNOWLEDGED")
     print("=" * 60)
     print(f"  Domain  : {args.domain}")
     print(f"  Username: {decrypted['username']}")
