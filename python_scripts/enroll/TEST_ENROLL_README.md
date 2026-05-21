@@ -1,123 +1,202 @@
+# Enrollment Test Scripts
 
-## Generate a CA key pair:
+This directory contains two test scripts and the key material used to test the
+full enrollment flow.
+
+---
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `test_server_enroll.py` | Full round-trip test: sends enrollment, decrypts LOGIN_TOKEN, verifies DEVICE_SIG |
+| `test_enroll.py` | Basic test: sends cert/payload, checks CERT_OK / PAYLOAD_OK / PAYLOAD_BAD |
+| `verify.py` | Standalone Ed25519 signature verifier |
+| `ca_private.hex` | CA private key seed (32 bytes, 64 hex chars) |
+| `ca_public.hex` | CA public key (32 bytes, 64 hex chars) |
+| `server_private.hex` | Server private key seed |
+| `server_public.hex` | Server public key |
+
+---
+
+## Dependencies
+
+```bash
+pip install pyserial cryptography
+```
+
+---
+
+## Generating New Keys
+
+If you need fresh key material:
 
 ```python
 from cryptography.hazmat.primitives.asymmetric import ed25519
 import binascii
 
-ca_privkey = ed25519.Ed25519PrivateKey.generate()
-ca_privkey_bytes = ca_privkey.private_bytes_raw()  # 32-byte seed
+# CA key pair
+ca_sk = ed25519.Ed25519PrivateKey.generate()
+open('ca_private.hex', 'w').write(binascii.hexlify(ca_sk.private_bytes_raw()).decode())
+open('ca_public.hex',  'w').write(binascii.hexlify(ca_sk.public_key().public_bytes_raw()).decode())
 
-ca_pubkey = ca_privkey.public_key()
-ca_pubkey_bytes = ca_pubkey.public_bytes_raw()  # 32 bytes
-
-with open('ca_private.hex', 'w') as f:
-    f.write(binascii.hexlify(ca_privkey_bytes).decode())
-
-with open('ca_public.hex', 'w') as f:
-    f.write(binascii.hexlify(ca_pubkey_bytes).decode())
-
-print(f"CA Private Key: {binascii.hexlify(ca_privkey_bytes).decode()}")
-print(f"CA Public Key:  {binascii.hexlify(ca_pubkey_bytes).decode()}")
+# Server key pair
+sv_sk = ed25519.Ed25519PrivateKey.generate()
+open('server_private.hex', 'w').write(binascii.hexlify(sv_sk.private_bytes_raw()).decode())
+open('server_public.hex',  'w').write(binascii.hexlify(sv_sk.public_key().public_bytes_raw()).decode())
 ```
 
->>> print(f"CA Private Key: {binascii.hexlify(ca_privkey_bytes).decode()}")
-CA Private Key: c445d81a59072157e5a0753641bd997a89a1020a59f2452930023676cb4d1c8a
->>> print(f"CA Public Key:  {binascii.hexlify(ca_pubkey_bytes).decode()}")
-CA Public Key:  6082454eab1c7c1e13c8ab61dbf9324dab0123bff6144eea42b7c868c95badc9
+After generating new keys you must also update the CA public key compiled into
+the FPGA firmware (`CA_PUBKEY` constant in `c_code/main.c`) and re-flash.
 
+---
 
-## Generate Server Key Pair
+## Full Enrollment Test: `test_server_enroll.py`
 
-```python
-from cryptography.hazmat.primitives.asymmetric import ed25519
-import binascii
+This is the primary test script. It acts as the server: constructs a
+CA-signed certificate and a signed payload, sends the `enroll` command to the
+Arduino over serial, then verifies everything the dongle returns.
 
-server_privkey = ed25519.Ed25519PrivateKey.generate()
-server_privkey_bytes = server_privkey.private_bytes_raw()
-
-server_pubkey = server_privkey.public_key()
-server_pubkey_bytes = server_pubkey.public_bytes_raw()
-
-with open('server_public.hex', 'w') as f:
-    f.write(binascii.hexlify(server_pubkey_bytes).decode())
-
-with open('server_private.hex', 'w') as f:
-    f.write(binascii.hexlify(server_privkey_bytes).decode())
-
-print(f"Server Public Key: {binascii.hexlify(server_pubkey_bytes).decode()}")
-print(f"Server Private Key: {binascii.hexlify(server_privkey_bytes).decode()}")
-```
->>> print(f"Server Public Key: {binascii.hexlify(server_pubkey_bytes).decode()}")
-Server Public Key: 4d8b666fe8bac270910f368e580a8b7abe4fbf47b8af54306b6467a42dc41b79
->>> print(f"Server Private Key: {binascii.hexlify(server_privkey_bytes).decode()}")
-Server Private Key: 92e5351e55037d95302dd064b1af989f8262319b1ccd8087fc62aa3561c8b3fc
-
-
-
-## Enroll payload format
-
-`"login" || PUF_challenge(16B) || Nonce(16B), ["login" || PUF_challenge || Nonce]_SK_Server`
-
-- Message bytes: 5 + 16 + 16 = 37 bytes
-- Signature bytes: 64 bytes (Ed25519)
-- Total decoded payload bytes: 101 bytes
-
-### Test with valid certificate
+### Usage
 
 ```bash
-python3 test_enroll.py \
-  --ca-private-key ca_private.hex \
-  --port /dev/tty.usbmodem11201 \
-  enroll \
-  --domain "ilyas.com" \
-  --server-pubkey server_public.hex \
-  --server-private-key server_private.hex
+python3 test_server_enroll.py \
+    --ca-private-key   ca_private.hex \
+    --server-private-key server_private.hex \
+    --server-pubkey    server_public.hex \
+    --port /dev/cu.usbmodem1201 \
+    --domain "example.com"
 ```
 
-### Test with invalid tampered certificate
+Optional arguments:
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--domain` | `example.com` | Domain to enroll |
+| `--timeout` | `120` | Seconds to wait for ENROLL_COMPLETE (includes touch-screen interaction) |
+| `--challenge-hex` | random | Fixed 32 hex-char challenge for reproducibility |
+| `--nonce-hex` | random | Fixed 32 hex-char nonce for reproducibility |
+
+### What It Tests
+
+1. **Certificate construction** — builds `Domain(32) || PK_Server(32)` and
+   signs it with the CA private key.
+2. **Payload construction** — builds `"login" || challenge(16) || nonce(16)`
+   and signs it with the server private key.
+3. **Serial send** — encodes both as base64 and sends `enroll <cert> <payload>`
+   to the Arduino.
+4. **Terminal token detection** — reads lines until one of `ENROLL_COMPLETE`,
+   `ENROLL_CANCELLED`, `ENROLL_REJECTED`, `CERT_BAD`, `PAYLOAD_BAD`, or
+   `ENROLL_ERROR` appears (or timeout).
+5. **LOGIN_TOKEN decryption**:
+   - Converts the server Ed25519 seed to an X25519 private key via SHA-512
+     clamping.
+   - Performs X25519 ECDH with the ephemeral public key from the token.
+   - Derives `key = SHA-256(shared || eph_pub)`.
+   - Decrypts with ChaCha20-Poly1305 (12-byte IETF nonce).
+   - Splits plaintext on `|` to recover `username`, `password`,
+     `device_pubkey_hex`.
+6. **Pubkey cross-check** — verifies that the `device_pubkey_hex` inside the
+   decrypted token matches the `DEVICE_PK` line printed by the dongle.
+7. **DEVICE_SIG verification** — verifies the Ed25519 signature over the full
+   101-byte enrollment payload using the device public key from step 5.
+
+### Expected Output (successful run)
+
+```
+[*] Loading keys...
+[*] Domain:    example.com
+[*] Challenge: <32 hex chars>
+[*] Nonce:     <32 hex chars>
+
+[*] Connecting to Arduino.  Interact with the touch screen when prompted.
+[*] Waiting up to 120 seconds for ENROLL_COMPLETE...
+
+[>] enroll <cert_b64>... <payload_b64>...
+[<] **** Received command: 'enroll ...' ****
+[<] CERT_OK
+[<] Domain: example.com
+[<] PK_Server: <64 hex>
+[<] PAYLOAD_OK
+... (touch-screen interaction) ...
+[<] DEVICE_PK: <64 hex>
+[<] DEVICE_SIG: <128 hex>
+[<] LOGIN_TOKEN: <hex>
+[<] ENROLL_COMPLETE
+
+[*] DEVICE_PK  (32 bytes): <64 hex>
+[*] DEVICE_SIG (64 bytes): <first 32 hex>...
+[*] LOGIN_TOKEN (N bytes): <first 32 hex>...
+
+[*] Decrypting LOGIN_TOKEN...
+[+] username:          <entered username>
+[+] password:          ****  (N chars)
+[+] device pubkey hex: <64 hex>
+
+[+] DEVICE_PK matches the public key inside the decrypted token.
+
+[*] Verifying DEVICE_SIG over the 101-byte payload...
+[+] Signature is VALID — device key authenticated against this session's payload.
+
+============================================================
+  ENROLLMENT TEST PASSED
+============================================================
+  Domain  : example.com
+  Username: <username>
+  Device PK: <64 hex>
+============================================================
+```
+
+### Failure Modes
+
+| Output | Cause |
+|--------|-------|
+| `[FAIL] Certificate rejected` | Arduino printed `CERT_BAD` — CA key mismatch or tampered cert |
+| `[FAIL] Payload rejected` | Arduino printed `PAYLOAD_BAD` — server signature invalid |
+| `[FAIL] Decryption failed` | Wrong server private key, or LOGIN_TOKEN corrupted |
+| `[FAIL] Device pubkey mismatch` | Token and `DEVICE_PK` line disagree — likely a parsing bug |
+| `[FAIL] Signature is INVALID` | Device signed with a different key than the one in the token |
+| `[!] Timeout` | Arduino did not respond within `--timeout` seconds |
+
+---
+
+## Basic Certificate/Payload Test: `test_enroll.py`
+
+Tests cert and payload verification only (no key generation or LOGIN_TOKEN).
+Useful for quickly checking that the CA key on the FPGA matches and that the
+server's signing key is correct.
 
 ```bash
+# Valid certificate and payload
 python3 test_enroll.py \
-  --ca-private-key ca_private.hex \
-  --port /dev/tty.usbmodem11201 \
-  enroll-bad \
-  --domain "ilyas.com" \
-  --server-pubkey server_public.hex \
-  --server-private-key server_private.hex
+    --ca-private-key ca_private.hex \
+    --port /dev/tty.usbmodem11201 \
+    enroll \
+    --domain "ilyas.com" \
+    --server-pubkey server_public.hex \
+    --server-private-key server_private.hex
+
+# Tampered certificate (should print CERT_BAD)
+python3 test_enroll.py ... enroll-bad ...
+
+# Valid cert but tampered payload signature (should print PAYLOAD_BAD)
+python3 test_enroll.py ... enroll-payload-bad ...
+
+# Fixed challenge and nonce for reproducibility
+python3 test_enroll.py ... enroll ... \
+    --challenge-hex 00112233445566778899aabbccddeeff \
+    --nonce-hex     ffeeddccbbaa99887766554433221100
 ```
 
-### Test with valid cert but tampered payload signature
+---
 
-```bash
-python3 test_enroll.py \
-  --ca-private-key ca_private.hex \
-  --port /dev/tty.usbmodem11201 \
-  enroll-payload-bad \
-  --domain "ilyas.com" \
-  --server-pubkey server_public.hex \
-  --server-private-key server_private.hex
+## LOGIN_TOKEN Format Reference
+
+```
+eph_pub(32) || enc_nonce(12) || ciphertext(N) || poly1305_tag(16)
 ```
 
-### Use fixed challenge and nonce (hex)
+- `N` = `len("username|password|" + 64-char pubkey_hex)` (typically 80–140 bytes)
+- Total token bytes: `32 + 12 + N + 16 = 60 + N`
 
-```bash
-python3 test_enroll.py \
-  --ca-private-key ca_private.hex \
-  --port /dev/tty.usbmodem11201 \
-  enroll \
-  --domain "ilyas.com" \
-  --server-pubkey server_public.hex \
-  --server-private-key server_private.hex \
-  --challenge-hex 00112233445566778899aabbccddeeff \
-  --nonce-hex ffeeddccbbaa99887766554433221100
-```
-
-## Certificate Format
-
-Generated certificates are 128 bytes:
-- Bytes 0-31: Domain name (padded with zeros)
-- Bytes 32-63: Server public key (32 bytes)
-- Bytes 64-127: Ed25519 signature over (domain || server_pubkey)
-
-Encoded as base64 before sending to Arduino.
+The token is printed as lowercase hex on the `LOGIN_TOKEN:` line.

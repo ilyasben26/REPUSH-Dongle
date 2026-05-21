@@ -1,5 +1,8 @@
 #include <Arduino.h>
 #include <Ed25519.h>
+#include <Curve25519.h>
+#include <ChaChaPoly.h>
+#include <SHA256.h>
 #include <string.h>
 #include "puf_functions.h"
 #include "touch_keyboard.h"
@@ -18,6 +21,12 @@ static constexpr uint8_t PROTO_CMD_PING = 1;
 static constexpr uint8_t PROTO_CMD_GET_INFO = 2;
 static constexpr uint8_t PROTO_CMD_GET_TIME = 3;
 static constexpr uint8_t PROTO_CMD_GET_CA_KEY = 4;
+static constexpr uint8_t PROTO_CMD_PUF_GET_FREE_STATE    = 5;
+static constexpr uint8_t PROTO_CMD_PUF_RECONFIGURE_STATE = 6;
+static constexpr uint8_t PROTO_CMD_PUF_CHALLENGE_LR      = 7;
+static constexpr uint8_t PROTO_CMD_PUF_SET_DOMAIN        = 8;
+static constexpr uint8_t PROTO_CMD_PUF_STORE_ENROLLMENT  = 9;
+static constexpr uint8_t PROTO_CMD_PUF_SAVE_STATES       = 10;
 static constexpr size_t PROTO_MAX_PAYLOAD = 96;
 static constexpr size_t CERT_DOMAIN_BYTES = 32;
 static constexpr size_t CERT_PK_SERVER_BYTES = 32;
@@ -302,6 +311,106 @@ bool decode_base64(const String &input, uint8_t *out, size_t out_max, size_t &ou
   return true;
 }
 
+static void fill_random(uint8_t *buf, size_t len)
+{
+  size_t i = 0;
+  while (i < len)
+  {
+    uint32_t r = generateRandomSeed();
+    size_t chunk = (len - i < 4) ? (len - i) : 4;
+    for (size_t j = 0; j < chunk; j++)
+      buf[i++] = static_cast<uint8_t>((r >> (j * 8)) & 0xFF);
+  }
+}
+
+// GF(2^255-19) field arithmetic for Ed25519 public key -> X25519 public key conversion.
+// Algorithm: u = (1+y) / (1-y) mod p  (birational map Edwards -> Montgomery)
+// Uses TweetNaCl-style 16-limb representation (16 x 16-bit limbs, int64_t for overflow headroom).
+
+typedef int64_t gf25519[16];
+
+static void gf_carry(gf25519 o) {
+    for (int i = 0; i < 16; i++) {
+        o[i] += (int64_t)65536;
+        int64_t c = o[i] >> 16;
+        if (i < 15) o[i + 1] += c - 1;
+        else        o[0]     += 38 * (c - 1);
+        o[i] -= c << 16;
+    }
+}
+
+static void gf_mul(gf25519 o, const gf25519 a, const gf25519 b) {
+    int64_t t[31] = {0};
+    for (int i = 0; i < 16; i++)
+        for (int j = 0; j < 16; j++)
+            t[i + j] += a[i] * b[j];
+    for (int i = 0; i < 15; i++)
+        t[i] += 38 * t[i + 16];
+    for (int i = 0; i < 16; i++) o[i] = t[i];
+    gf_carry(o);
+    gf_carry(o);
+}
+
+static void gf_inv(gf25519 o, const gf25519 a) {
+    // Fermat: a^(p-2) mod p, p-2 = 2^255-21, all bits set except bits 2 and 4
+    gf25519 c;
+    for (int i = 0; i < 16; i++) c[i] = a[i];
+    for (int i = 253; i >= 0; i--) {
+        gf_mul(c, c, c); // square
+        if (i != 2 && i != 4) gf_mul(c, c, a);
+    }
+    for (int i = 0; i < 16; i++) o[i] = c[i];
+}
+
+static void gf_from_bytes(gf25519 o, const uint8_t b[32]) {
+    for (int i = 0; i < 16; i++)
+        o[i] = (int64_t)b[2*i] | ((int64_t)b[2*i+1] << 8);
+}
+
+static void gf_to_bytes(uint8_t b[32], gf25519 n) {
+    gf25519 m, t;
+    for (int i = 0; i < 16; i++) t[i] = n[i];
+    gf_carry(t); gf_carry(t); gf_carry(t);
+    // Subtract p twice to get canonical representative in [0, p)
+    for (int j = 0; j < 2; j++) {
+        m[0] = t[0] - 0xffed;
+        for (int i = 1; i < 15; i++) {
+            m[i] = t[i] - 0xffff - ((m[i-1] >> 16) & 1);
+            m[i-1] &= 0xffff;
+        }
+        m[15] = t[15] - 0x7fff - ((m[14] >> 16) & 1);
+        int64_t borrow = (m[15] >> 16) & 1; // 1 if t < p (keep t), 0 if t >= p (use m)
+        m[14] &= 0xffff;
+        // Conditionally swap t and m: swap when borrow=0 (t >= p, use reduced m)
+        int64_t mask = -(int64_t)(1 - borrow);
+        for (int i = 0; i < 16; i++) {
+            int64_t d = mask & (t[i] ^ m[i]);
+            t[i] ^= d;
+            m[i] ^= d;
+        }
+    }
+    for (int i = 0; i < 16; i++) {
+        b[2*i]   = static_cast<uint8_t>(t[i] & 0xff);
+        b[2*i+1] = static_cast<uint8_t>(t[i] >> 8);
+    }
+}
+
+// Convert Ed25519 public key to Curve25519 (X25519) public key.
+// Implements u = (1+y) / (1-y) mod p from the birational equivalence.
+static void ed25519_pk_to_x25519(uint8_t out[32], const uint8_t ed_pk[32]) {
+    uint8_t tmp[32];
+    memcpy(tmp, ed_pk, 32);
+    tmp[31] &= 0x7f; // clear sign bit to get y coordinate
+    gf25519 y, num, den;
+    gf_from_bytes(y, tmp);
+    for (int i = 0; i < 16; i++) { num[i] = y[i]; den[i] = -y[i]; }
+    num[0] += 1; // num = 1 + y
+    den[0] += 1; // den = 1 - y
+    gf_inv(den, den);
+    gf_mul(num, num, den); // u = (1+y) / (1-y)
+    gf_to_bytes(out, num);
+}
+
 bool fetch_ca_key_from_fpga()
 {
   ProtoFrame response = {};
@@ -328,6 +437,138 @@ bool fetch_ca_key_from_fpga()
     ca_pubkey[i] = response.payload[i];
 
   ca_pubkey_loaded = true;
+  return true;
+}
+
+bool fpga_puf_get_free_state(uint8_t &state_index)
+{
+  ProtoFrame response = {};
+  if (!fpga_rpc(PROTO_CMD_PUF_GET_FREE_STATE, nullptr, 0, response, 2000))
+  {
+    Serial.println("Error: fpga_puf_get_free_state timeout.");
+    return false;
+  }
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.println("Error: All PUF state slots are in use.");
+    return false;
+  }
+  if (response.len < 1)
+  {
+    Serial.println("Error: fpga_puf_get_free_state short response.");
+    return false;
+  }
+  state_index = response.payload[0];
+  return true;
+}
+
+bool fpga_puf_reconfigure_state(uint8_t state_index, uint32_t seed)
+{
+  uint8_t req[5];
+  ProtoFrame response = {};
+  req[0] = state_index;
+  req[1] = static_cast<uint8_t>(seed & 0xFF);
+  req[2] = static_cast<uint8_t>((seed >> 8) & 0xFF);
+  req[3] = static_cast<uint8_t>((seed >> 16) & 0xFF);
+  req[4] = static_cast<uint8_t>((seed >> 24) & 0xFF);
+  if (!fpga_rpc(PROTO_CMD_PUF_RECONFIGURE_STATE, req, sizeof(req), response, 5000))
+  {
+    Serial.println("Error: fpga_puf_reconfigure_state timeout.");
+    return false;
+  }
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.println("Error: FPGA rejected PUF state reconfiguration.");
+    return false;
+  }
+  return true;
+}
+
+bool fpga_puf_challenge_lr(uint8_t state_index, uint32_t challenge_id, uint8_t out[32])
+{
+  uint8_t req[5];
+  ProtoFrame response = {};
+  req[0] = state_index;
+  req[1] = static_cast<uint8_t>(challenge_id & 0xFF);
+  req[2] = static_cast<uint8_t>((challenge_id >> 8) & 0xFF);
+  req[3] = static_cast<uint8_t>((challenge_id >> 16) & 0xFF);
+  req[4] = static_cast<uint8_t>((challenge_id >> 24) & 0xFF);
+  if (!fpga_rpc(PROTO_CMD_PUF_CHALLENGE_LR, req, sizeof(req), response, 5000))
+  {
+    Serial.println("Error: fpga_puf_challenge_lr timeout.");
+    return false;
+  }
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.println("Error: FPGA rejected LR-PUF challenge.");
+    return false;
+  }
+  if (response.len < 32)
+  {
+    Serial.println("Error: fpga_puf_challenge_lr short response.");
+    return false;
+  }
+  memcpy(out, response.payload, 32);
+  return true;
+}
+
+bool fpga_puf_set_domain(uint8_t state_index, const char *domain)
+{
+  uint8_t req[1 + 32];
+  ProtoFrame response = {};
+  req[0] = state_index;
+  size_t dlen = strlen(domain);
+  if (dlen > 32)
+    dlen = 32;
+  memcpy(req + 1, domain, dlen);
+  if (!fpga_rpc(PROTO_CMD_PUF_SET_DOMAIN, req, static_cast<uint16_t>(1 + dlen), response, 2000))
+  {
+    Serial.println("Error: fpga_puf_set_domain timeout.");
+    return false;
+  }
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.println("Error: FPGA rejected set domain.");
+    return false;
+  }
+  return true;
+}
+
+bool fpga_puf_store_enrollment(uint8_t state_index,
+                               const uint8_t pubkey[32],
+                               const uint8_t challenge_raw[16])
+{
+  uint8_t req[49];
+  ProtoFrame response = {};
+  req[0] = state_index;
+  memcpy(req + 1, pubkey, 32);
+  memcpy(req + 33, challenge_raw, 16);
+  if (!fpga_rpc(PROTO_CMD_PUF_STORE_ENROLLMENT, req, sizeof(req), response, 2000))
+  {
+    Serial.println("Error: fpga_puf_store_enrollment timeout.");
+    return false;
+  }
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.println("Error: FPGA rejected store enrollment.");
+    return false;
+  }
+  return true;
+}
+
+bool fpga_puf_save_states()
+{
+  ProtoFrame response = {};
+  if (!fpga_rpc(PROTO_CMD_PUF_SAVE_STATES, nullptr, 0, response, 3000))
+  {
+    Serial.println("Error: fpga_puf_save_states timeout.");
+    return false;
+  }
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.println("Error: FPGA failed to save states.");
+    return false;
+  }
   return true;
 }
 
@@ -849,8 +1090,145 @@ void loop()
               if (touch_kb_prompt_credentials(username, sizeof(username),
                                               password, sizeof(password)))
               {
-                Serial.print("USERNAME: ");
-                Serial.println(username);
+                // Step 1: find the next free LR-PUF state slot on the FPGA
+                uint8_t state_index = 0;
+                if (!fpga_puf_get_free_state(state_index))
+                {
+                  Serial.println("ENROLL_ERROR: no free PUF state slots");
+                  return;
+                }
+
+                // Step 2: reconfigure that state with a fresh random seed
+                uint32_t seed = generateRandomSeed();
+                if (!fpga_puf_reconfigure_state(state_index, seed))
+                {
+                  Serial.println("ENROLL_ERROR: PUF state reconfiguration failed");
+                  return;
+                }
+
+                // Step 3: challenge_id = first 4 bytes of PUF_challenge (payload[5..8], LE)
+                uint32_t challenge_id =
+                    static_cast<uint32_t>(payload[5]) |
+                    (static_cast<uint32_t>(payload[6]) << 8) |
+                    (static_cast<uint32_t>(payload[7]) << 16) |
+                    (static_cast<uint32_t>(payload[8]) << 24);
+
+                // Step 4: run LR-PUF challenge — 32-byte output is the Ed25519 private key seed
+                uint8_t device_privkey[32] = {0};
+                if (!fpga_puf_challenge_lr(state_index, challenge_id, device_privkey))
+                {
+                  Serial.println("ENROLL_ERROR: LR-PUF challenge failed");
+                  return;
+                }
+
+                // Step 5: derive Ed25519 public key
+                uint8_t device_pubkey[32];
+                Ed25519::derivePublicKey(device_pubkey, device_privkey);
+
+                // Step 6: persist enrollment record on FPGA SD card (acknowledged = 0)
+                if (!fpga_puf_set_domain(state_index, domain) ||
+                    !fpga_puf_store_enrollment(state_index, device_pubkey, &payload[5]) ||
+                    !fpga_puf_save_states())
+                {
+                  Serial.println("ENROLL_ERROR: failed to persist state on FPGA");
+                  memset(device_privkey, 0, sizeof(device_privkey));
+                  return;
+                }
+
+                // Step 7: sign the full 101-byte received payload with the device private key
+                // (signs "login"||challenge||nonce||server_sig, binding our key to this exact session)
+                uint8_t device_sig[64];
+                Ed25519::sign(device_sig, device_privkey, device_pubkey,
+                              payload, ENROLL_PAYLOAD_TOTAL_BYTES);
+
+                // Step 8: convert server's Ed25519 public key to X25519 for ECIES
+                // Done locally via birational map u=(1+y)/(1-y) mod p
+                const uint8_t *server_ed25519_pk = cert + CERT_DOMAIN_BYTES;
+                uint8_t server_x25519_pk[32];
+                ed25519_pk_to_x25519(server_x25519_pk, server_ed25519_pk);
+
+                // Step 9: ECIES — generate an ephemeral X25519 key pair
+                uint8_t eph_priv[32];
+                fill_random(eph_priv, sizeof(eph_priv));
+                uint8_t eph_pub[32];
+                Curve25519::dh1(eph_pub, eph_priv); // also clamps eph_priv
+
+                // Step 10: ECDH shared secret
+                uint8_t shared[32];
+                memcpy(shared, server_x25519_pk, 32);
+                Curve25519::dh2(shared, eph_priv);  // shared = X25519(eph_priv, server_x25519_pk)
+
+                // Step 11: derive 32-byte encryption key = SHA256(shared || eph_pub)
+                SHA256 sha256;
+                uint8_t enc_key[32];
+                sha256.reset();
+                sha256.update(shared, 32);
+                sha256.update(eph_pub, 32);
+                sha256.finalize(enc_key, 32);
+                memset(shared, 0, sizeof(shared));
+
+                // Step 12: build plaintext "username|password|device_pubkey_hex"
+                char plaintext[128] = {0};
+                size_t pt_len = 0;
+                {
+                  size_t ulen = strlen(username);
+                  memcpy(plaintext + pt_len, username, ulen);
+                  pt_len += ulen;
+                  plaintext[pt_len++] = '|';
+                  size_t plen = strlen(password);
+                  memcpy(plaintext + pt_len, password, plen);
+                  pt_len += plen;
+                  plaintext[pt_len++] = '|';
+                  static const char hex_chars[] = "0123456789ABCDEF";
+                  for (size_t i = 0; i < 32; i++)
+                  {
+                    plaintext[pt_len++] = hex_chars[device_pubkey[i] >> 4];
+                    plaintext[pt_len++] = hex_chars[device_pubkey[i] & 0x0F];
+                  }
+                }
+
+                // Step 13: random 12-byte nonce (IETF ChaCha20-Poly1305)
+                uint8_t enc_nonce[12];
+                fill_random(enc_nonce, sizeof(enc_nonce));
+
+                // Step 14: ChaCha20-Poly1305 encrypt (12-byte IETF nonce, 16-byte tag)
+                ChaChaPoly aead;
+                uint8_t ciphertext[128];
+                uint8_t tag[16];
+                aead.setKey(enc_key, 32);
+                aead.setIV(enc_nonce, 12);
+                aead.encrypt(ciphertext,
+                             reinterpret_cast<const uint8_t *>(plaintext), pt_len);
+                aead.computeTag(tag, 16);
+
+                // wipe sensitive material before printing
+                memset(enc_key, 0, sizeof(enc_key));
+                memset(device_privkey, 0, sizeof(device_privkey));
+                memset(eph_priv, 0, sizeof(eph_priv));
+                memset(plaintext, 0, sizeof(plaintext));
+
+                // Step 15: print results
+                Serial.print("DEVICE_PK: ");
+                print_hex_bytes(device_pubkey, 32);
+                Serial.println();
+
+                Serial.print("DEVICE_SIG: ");
+                print_hex_bytes(device_sig, 64);
+                Serial.println();
+
+                // LOGIN_TOKEN: eph_pub(32) || nonce(12) || ciphertext(pt_len) || tag(16)
+                // To decrypt: convert server Ed25519 sk -> X25519 sk,
+                //   shared = X25519(sk, eph_pub),
+                //   key = SHA256(shared || eph_pub),
+                //   plaintext = ChaCha20Poly1305(key, nonce).decrypt(ciphertext || tag)
+                // Plaintext: "username|password|device_pubkey_hex"
+                Serial.print("LOGIN_TOKEN: ");
+                print_hex_bytes(eph_pub, 32);
+                print_hex_bytes(enc_nonce, 12);
+                print_hex_bytes(ciphertext, pt_len);
+                print_hex_bytes(tag, 16);
+                Serial.println();
+
                 Serial.println("ENROLL_COMPLETE");
               }
               else
