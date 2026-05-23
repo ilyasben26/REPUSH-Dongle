@@ -29,6 +29,8 @@ static constexpr uint8_t PROTO_CMD_PUF_STORE_ENROLLMENT  = 9;
 static constexpr uint8_t PROTO_CMD_PUF_SAVE_STATES           = 10;
 static constexpr uint8_t PROTO_CMD_PUF_FIND_STATE_BY_DOMAIN  = 11;
 static constexpr uint8_t PROTO_CMD_PUF_MARK_ACKNOWLEDGED     = 12;
+static constexpr uint8_t PROTO_CMD_PUF_CLEAR_STATES          = 13;
+static constexpr uint8_t PROTO_CMD_PUF_GET_SLOT_STATUS       = 14;
 static constexpr size_t PROTO_MAX_PAYLOAD = 96;
 static constexpr size_t CERT_DOMAIN_BYTES = 32;
 static constexpr size_t CERT_PK_SERVER_BYTES = 32;
@@ -625,6 +627,52 @@ bool fpga_puf_save_states()
   return true;
 }
 
+bool fpga_puf_clear_states()
+{
+  ProtoFrame response = {};
+  if (!fpga_rpc(PROTO_CMD_PUF_CLEAR_STATES, nullptr, 0, response, 5000))
+  {
+    Serial.println("Error: fpga_puf_clear_states timeout.");
+    return false;
+  }
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.println("Error: FPGA failed to clear states.");
+    return false;
+  }
+  return true;
+}
+
+bool fpga_puf_get_slot_status(uint8_t state_index,
+                               uint8_t &is_init,
+                               uint8_t &acknowledged,
+                               char domain_buf[65])
+{
+  ProtoFrame response = {};
+  if (!fpga_rpc(PROTO_CMD_PUF_GET_SLOT_STATUS, &state_index, 1, response, 2000))
+  {
+    Serial.println("Error: fpga_puf_get_slot_status timeout.");
+    return false;
+  }
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.println("Error: FPGA failed to get slot status.");
+    return false;
+  }
+  if (response.len < 2)
+  {
+    Serial.println("Error: fpga_puf_get_slot_status short response.");
+    return false;
+  }
+  is_init      = response.payload[0];
+  acknowledged = response.payload[1];
+  size_t dlen  = response.len - 2;
+  if (dlen > 64) dlen = 64;
+  memcpy(domain_buf, response.payload + 2, dlen);
+  domain_buf[dlen] = '\0';
+  return true;
+}
+
 bool verify_cert_locally(const uint8_t *cert, size_t cert_len)
 {
   const uint8_t *message = cert;
@@ -836,6 +884,8 @@ void setup()
   Serial.println("    tc: top_choice (1-3), bc: bottom_choice (0-2)");
   Serial.println("    count: number of reads (e.g., 100)");
   Serial.println("    delay: response delay in ms (e.g., 50)");
+  Serial.println("  fp_clear_states");
+  Serial.println("  fp_list_states");
   Serial.println("*** PUFMAN <-> DONGLE COMMANDS / PRODUCTION COMMANDS ***");
   Serial.println("  enroll <cert_b64> <payload_b64>");
   Serial.println("  acknowledge <domain> <sig_b64>");
@@ -1356,6 +1406,46 @@ void loop()
               Serial.println("ACK_OK");
             }
           }
+        }
+      }
+    }
+    else if (command_str.equalsIgnoreCase("fp_clear_states"))
+    {
+      if (fpga_puf_clear_states())
+        Serial.println("States cleared.");
+      else
+        Serial.println("Error: failed to clear states.");
+    }
+    else if (command_str.equalsIgnoreCase("fp_list_states"))
+    {
+      Serial.println("Slot | Domain                           | Status");
+      Serial.println("-----+----------------------------------+-------------");
+      for (uint8_t i = 0; i < 11; i++)
+      {
+        uint8_t is_init = 0, acked = 0;
+        char domain[65] = {0};
+        if (!fpga_puf_get_slot_status(i, is_init, acked, domain))
+        {
+          Serial.print("  ");
+          Serial.print(i);
+          Serial.println("  | (error)");
+          continue;
+        }
+        Serial.print("  ");
+        if (i < 10) Serial.print(' ');
+        Serial.print(i);
+        Serial.print(" | ");
+        if (!is_init)
+        {
+          Serial.println("(empty)");
+        }
+        else
+        {
+          size_t dlen = strlen(domain);
+          Serial.print(domain);
+          for (size_t j = dlen; j < 32; j++) Serial.print(' ');
+          Serial.print(" | ");
+          Serial.println(acked ? "ACKNOWLEDGED" : "PENDING");
         }
       }
     }
