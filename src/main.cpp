@@ -344,10 +344,7 @@ bool fpga_puf_find_state_by_domain(const char *domain,
     return false;
   }
   if (response.msg_type == PROTO_MSG_ERR)
-  {
-    Serial.println("Error: domain not found on FPGA.");
     return false;
-  }
   if (response.len < 81)
   {
     Serial.println("Error: fpga_puf_find_state_by_domain short response.");
@@ -1194,12 +1191,19 @@ void loop()
               if (touch_kb_prompt_credentials(username, sizeof(username),
                                               password, sizeof(password)))
               {
-                // Step 1: find the next free LR-PUF state slot on the FPGA
+                // Step 1: reuse existing slot for this domain, or allocate a free one
                 uint8_t state_index = 0;
-                if (!fpga_puf_get_free_state(state_index))
                 {
-                  Serial.println("ENROLL_ERROR: no free PUF state slots");
-                  return;
+                  uint8_t _pk[32], _ch[16], _pks[32];
+                  if (fpga_puf_find_state_by_domain(domain, state_index, _pk, _ch, _pks))
+                  {
+                    Serial.println("Note: domain already enrolled, overwriting slot.");
+                  }
+                  else if (!fpga_puf_get_free_state(state_index))
+                  {
+                    Serial.println("ENROLL_ERROR: no free PUF state slots");
+                    return;
+                  }
                 }
 
                 // Step 2: reconfigure that state with a fresh random seed
