@@ -44,6 +44,22 @@ static constexpr size_t ENROLL_NONCE_BYTES = 16;
 static constexpr size_t ENROLL_PAYLOAD_MSG_BYTES = ENROLL_PAYLOAD_PREFIX_BYTES + ENROLL_CHALLENGE_BYTES + ENROLL_NONCE_BYTES;
 static constexpr size_t ENROLL_PAYLOAD_TOTAL_BYTES = ENROLL_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES;
 
+// Error-correction parameters
+static constexpr uint8_t ENROLL_PUF_SAMPLES  = 10; // per-bit majority-vote samples during enrolment
+static constexpr uint8_t QUERY_PUF_MAX_TRIES = 20; // max re-query attempts during Phase 2 signing
+
+// Phase 2 sensitive payload layout (all sizes in bytes):
+//   "sensitive"(9) + C_Session(16) + N(16) + Description(32) + Server_Sig(64) = 137
+static constexpr char   SENSITIVE_PAYLOAD_PREFIX[]      = "sensitive";
+static constexpr size_t SENSITIVE_PAYLOAD_PREFIX_BYTES  = 9;
+static constexpr size_t SENSITIVE_CHALLENGE_BYTES       = 16;
+static constexpr size_t SENSITIVE_NONCE_BYTES           = 16;
+static constexpr size_t SENSITIVE_DESCRIPTION_BYTES     = 32;
+static constexpr size_t SENSITIVE_PAYLOAD_MSG_BYTES     =
+    SENSITIVE_PAYLOAD_PREFIX_BYTES + SENSITIVE_CHALLENGE_BYTES +
+    SENSITIVE_NONCE_BYTES + SENSITIVE_DESCRIPTION_BYTES;
+static constexpr size_t SENSITIVE_PAYLOAD_TOTAL_BYTES   = SENSITIVE_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES;
+
 static uint8_t ca_pubkey[32] = {0};
 static bool ca_pubkey_loaded = false;
 
@@ -218,26 +234,45 @@ bool fpga_read_frame(ProtoFrame &frame, uint32_t timeout_ms)
   return false;
 }
 
+static constexpr int     FPGA_RPC_MAX_RETRIES  = 3;
+static constexpr uint32_t FPGA_RPC_RETRY_DELAY = 150; // ms between retries
+
 bool fpga_rpc(uint8_t cmd, const uint8_t *request_payload, uint16_t request_len, ProtoFrame &response, uint32_t timeout_ms)
 {
-  static uint8_t seq = 1;
-  uint8_t tx_seq = seq++;
-  uint32_t start = millis();
-
   if (request_len > PROTO_MAX_PAYLOAD)
     return false;
 
-  fpga_flush_rx();
-  fpga_send_frame(PROTO_MSG_REQ, tx_seq, cmd, request_payload, request_len);
+  static uint8_t seq = 1;
 
-  while ((millis() - start) < timeout_ms)
+  for (int attempt = 0; attempt < FPGA_RPC_MAX_RETRIES; attempt++)
   {
-    uint32_t remaining = timeout_ms - (millis() - start);
-    if (!fpga_read_frame(response, remaining))
-      return false;
+    if (attempt > 0)
+    {
+      delay(FPGA_RPC_RETRY_DELAY);
+      Serial.print("[FPGA] timeout, retry ");
+      Serial.print(attempt);
+      Serial.print("/");
+      Serial.print(FPGA_RPC_MAX_RETRIES - 1);
+      Serial.print(" cmd=0x");
+      Serial.println(cmd, HEX);
+    }
 
-    if (response.seq == tx_seq && response.cmd == cmd)
-      return true;
+    uint8_t  tx_seq = seq++;
+    uint32_t start  = millis();
+
+    fpga_flush_rx();
+    fpga_send_frame(PROTO_MSG_REQ, tx_seq, cmd, request_payload, request_len);
+
+    while ((millis() - start) < timeout_ms)
+    {
+      uint32_t remaining = timeout_ms - (millis() - start);
+      if (!fpga_read_frame(response, remaining))
+        break; // timed out on this attempt — go to next retry
+
+      if (response.seq == tx_seq && response.cmd == cmd)
+        return true;
+      // wrong seq/cmd: keep waiting (may be a stale frame from a prior op)
+    }
   }
 
   return false;
@@ -534,16 +569,18 @@ bool fpga_puf_reconfigure_state(uint8_t state_index, uint32_t seed)
   return true;
 }
 
-bool fpga_puf_challenge_lr(uint8_t state_index, uint32_t challenge_id, uint8_t out[32])
+bool fpga_puf_challenge_lr(uint8_t state_index, uint32_t challenge_id, uint8_t out[32], uint8_t count = 1)
 {
-  uint8_t req[5];
+  uint8_t req[6];
   ProtoFrame response = {};
   req[0] = state_index;
   req[1] = static_cast<uint8_t>(challenge_id & 0xFF);
   req[2] = static_cast<uint8_t>((challenge_id >> 8) & 0xFF);
   req[3] = static_cast<uint8_t>((challenge_id >> 16) & 0xFF);
   req[4] = static_cast<uint8_t>((challenge_id >> 24) & 0xFF);
-  if (!fpga_rpc(PROTO_CMD_PUF_CHALLENGE_LR, req, sizeof(req), response, 5000))
+  req[5] = (count == 0) ? 1 : count;
+  uint32_t timeout_ms = 5000u + 500u * static_cast<uint32_t>(req[5]);
+  if (!fpga_rpc(PROTO_CMD_PUF_CHALLENGE_LR, req, sizeof(req), response, timeout_ms))
   {
     Serial.println("Error: fpga_puf_challenge_lr timeout.");
     return false;
@@ -668,6 +705,45 @@ bool fpga_puf_get_slot_status(uint8_t state_index,
   memcpy(domain_buf, response.payload + 2, dlen);
   domain_buf[dlen] = '\0';
   return true;
+}
+
+// Phase 2 error correction: re-query the LR-PUF (count=1 each time) until the
+// derived Ed25519 public key matches the pubkey stored on the FPGA during enrolment.
+// Returns true and fills out_privkey on success; false after QUERY_PUF_MAX_TRIES.
+static bool puf_query_match(uint8_t state_index, uint32_t challenge_id,
+                             const uint8_t stored_pubkey[32], uint8_t out_privkey[32])
+{
+  for (int attempt = 1; attempt <= QUERY_PUF_MAX_TRIES; attempt++)
+  {
+    uint8_t seed[32] = {0};
+    if (!fpga_puf_challenge_lr(state_index, challenge_id, seed))
+    {
+      Serial.print("[PUF-EC] Attempt ");
+      Serial.print(attempt);
+      Serial.println(": FPGA error, retrying...");
+      continue;
+    }
+
+    uint8_t derived_pk[32];
+    Ed25519::derivePublicKey(derived_pk, seed);
+
+    if (memcmp(derived_pk, stored_pubkey, 32) == 0)
+    {
+      Serial.print("[PUF-EC] Key reproduced on attempt ");
+      Serial.println(attempt);
+      memcpy(out_privkey, seed, 32);
+      memset(seed, 0, sizeof(seed));
+      return true;
+    }
+
+    Serial.print("[PUF-EC] Attempt ");
+    Serial.print(attempt);
+    Serial.println(": pubkey mismatch, retrying...");
+    memset(seed, 0, sizeof(seed));
+  }
+
+  Serial.println("[PUF-EC] Error: key not reproduced within max attempts.");
+  return false;
 }
 
 bool verify_cert_locally(const uint8_t *cert, size_t cert_len)
@@ -885,7 +961,10 @@ void setup()
   Serial.println("  fp_list_states");
   Serial.println("*** PUFMAN <-> DONGLE COMMANDS / PRODUCTION COMMANDS ***");
   Serial.println("  enroll <cert_b64> <payload_b64>");
+  Serial.println("    (PUF queried 10x internally; majority-voted seed used for keygen)");
   Serial.println("  acknowledge <domain> <sig_b64>");
+  Serial.println("  sign_sensitive <domain> <payload_b64>");
+  Serial.println("    payload: base64( \"sensitive\"(9) + C_Session(16) + N(16) + Desc(32) + ServerSig(64) )");
 }
 
 void loop()
@@ -1221,9 +1300,10 @@ void loop()
                     (static_cast<uint32_t>(payload[7]) << 16) |
                     (static_cast<uint32_t>(payload[8]) << 24);
 
-                // Step 4: run LR-PUF challenge — 32-byte output is the Ed25519 private key seed
+                // Step 4: run LR-PUF challenge with per-bit majority voting (ENROLL_PUF_SAMPLES
+                // raw measurements voted inside the FPGA) for a stable enrollment seed.
                 uint8_t device_privkey[32] = {0};
-                if (!fpga_puf_challenge_lr(state_index, challenge_id, device_privkey))
+                if (!fpga_puf_challenge_lr(state_index, challenge_id, device_privkey, ENROLL_PUF_SAMPLES))
                 {
                   Serial.println("ENROLL_ERROR: LR-PUF challenge failed");
                   return;
@@ -1408,6 +1488,114 @@ void loop()
             else
             {
               Serial.println("ACK_OK");
+            }
+          }
+        }
+      }
+    }
+    else if (command_str.startsWith("sign_sensitive "))
+    {
+      // Phase 2: SignSensitivePayload(Domain, SensitivePayload)
+      // Command: sign_sensitive <domain> <payload_b64>
+      // Payload decodes to SENSITIVE_PAYLOAD_TOTAL_BYTES (137 bytes):
+      //   "sensitive"(9) + C_Session(16) + N(16) + Description(32) + Server_Sig(64)
+      int first_space  = command_str.indexOf(' ');
+      int second_space = command_str.indexOf(' ', first_space + 1);
+
+      if (second_space == -1)
+      {
+        Serial.println("Error: Invalid command format.");
+        Serial.println("Expected: sign_sensitive <domain> <payload_b64>");
+      }
+      else
+      {
+        String domain_str   = command_str.substring(first_space + 1, second_space);
+        String payload_b64  = command_str.substring(second_space + 1);
+
+        uint8_t payload[SENSITIVE_PAYLOAD_TOTAL_BYTES] = {0};
+        size_t  payload_len = 0;
+
+        if (!decode_base64(payload_b64, payload, sizeof(payload), payload_len))
+        {
+          Serial.println("SIGN_ERROR: Invalid payload_b64.");
+        }
+        else if (payload_len != SENSITIVE_PAYLOAD_TOTAL_BYTES)
+        {
+          Serial.print("SIGN_ERROR: payload must decode to ");
+          Serial.print(SENSITIVE_PAYLOAD_TOTAL_BYTES);
+          Serial.println(" bytes.");
+        }
+        else if (memcmp(payload, SENSITIVE_PAYLOAD_PREFIX, SENSITIVE_PAYLOAD_PREFIX_BYTES) != 0)
+        {
+          Serial.println("SIGN_ERROR: payload prefix must be 'sensitive'.");
+        }
+        else
+        {
+          // Look up the enrolled state for this domain (provides stored pubkey + pk_server)
+          uint8_t state_index = 0;
+          uint8_t stored_pubkey[32], stored_challenge[16], pk_server[32];
+          if (!fpga_puf_find_state_by_domain(domain_str.c_str(), state_index,
+                                             stored_pubkey, stored_challenge, pk_server))
+          {
+            Serial.println("SIGN_ERROR: domain not enrolled on this device.");
+          }
+          else
+          {
+            // Verify server signature on the message portion (first SENSITIVE_PAYLOAD_MSG_BYTES)
+            const uint8_t *server_sig = payload + SENSITIVE_PAYLOAD_MSG_BYTES;
+            if (!Ed25519::verify(server_sig, pk_server, payload, SENSITIVE_PAYLOAD_MSG_BYTES))
+            {
+              Serial.println("SIGN_ERROR: server signature verification failed.");
+            }
+            else
+            {
+              // Extract C^i_Session (bytes [9..24]) → challenge_id (first 4 bytes LE)
+              const uint8_t *c_session = payload + SENSITIVE_PAYLOAD_PREFIX_BYTES;
+              uint32_t challenge_id =
+                  static_cast<uint32_t>(c_session[0]) |
+                  (static_cast<uint32_t>(c_session[1]) << 8) |
+                  (static_cast<uint32_t>(c_session[2]) << 16) |
+                  (static_cast<uint32_t>(c_session[3]) << 24);
+
+              // Extract NUL-terminated description (bytes [41..72])
+              char description[SENSITIVE_DESCRIPTION_BYTES + 1] = {0};
+              memcpy(description,
+                     payload + SENSITIVE_PAYLOAD_PREFIX_BYTES +
+                               SENSITIVE_CHALLENGE_BYTES +
+                               SENSITIVE_NONCE_BYTES,
+                     SENSITIVE_DESCRIPTION_BYTES);
+              description[SENSITIVE_DESCRIPTION_BYTES] = '\0';
+
+              // Show sensitive request on touchscreen; require explicit APPROVE
+              if (!touch_kb_confirm_sensitive(domain_str.c_str(), description))
+              {
+                Serial.println("SIGN_REJECTED");
+              }
+              else
+              {
+                // Phase 2 error correction: retry PUF queries until derived PK matches stored PK
+                uint8_t device_privkey[32] = {0};
+                if (!puf_query_match(state_index, challenge_id, stored_pubkey, device_privkey))
+                {
+                  Serial.println("SIGN_ERROR: PUF error-correction failed.");
+                }
+                else
+                {
+                  // Sign the full 137-byte SensitivePayload with the recovered private key
+                  uint8_t device_sig[64];
+                  Ed25519::sign(device_sig, device_privkey, stored_pubkey,
+                                payload, SENSITIVE_PAYLOAD_TOTAL_BYTES);
+
+                  memset(device_privkey, 0, sizeof(device_privkey));
+
+                  Serial.print("DOMAIN: ");
+                  Serial.println(domain_str);
+                  Serial.print("DEVICE_SIG: ");
+                  print_hex_bytes(device_sig, 64);
+                  Serial.println();
+                  Serial.println("SIGN_COMPLETE");
+                }
+              }
             }
           }
         }

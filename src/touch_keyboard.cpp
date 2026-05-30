@@ -710,6 +710,149 @@ bool touch_kb_confirm_login(const char *domain)
     }
 }
 
+bool touch_kb_confirm_sensitive(const char *domain, const char *description)
+{
+    _tft.fillScreen(C_BG);
+
+    // ── Title ─────────────────────────────────────────────────────────────────
+    // "SENSITIVE REQUEST" = 17 chars × 12 px = 204 px → x = (240-204)/2 = 18
+    _tft.setTextColor(ILI9341_ORANGE);
+    _tft.setTextSize(2);
+    _tft.setCursor(18, 4);
+    _tft.print("SENSITIVE REQUEST");
+    _tft.drawFastHLine(0, 24, _sw, 0x4208);
+
+    // ── Domain ────────────────────────────────────────────────────────────────
+    // Print "From: " in muted grey then the domain in cyan on the same line.
+    // textSize 1: 6 px/char, max 30 domain chars before hitting screen edge.
+    _tft.setTextSize(1);
+    _tft.setCursor(10, 30);
+    _tft.setTextColor(0x8410); // mid-grey
+    _tft.print("From: ");
+    _tft.setTextColor(ILI9341_CYAN);
+    const char *dom = (domain && strlen(domain) > 0) ? domain : "unknown";
+    // Truncate to 30 chars so "From: " + domain stays within 220 px
+    size_t domlen = strlen(dom);
+    if (domlen > 30) domlen = 30;
+    for (size_t i = 0; i < domlen; i++) _tft.print(dom[i]);
+
+    // ── Subtitle ──────────────────────────────────────────────────────────────
+    _tft.setTextColor(ILI9341_WHITE);
+    _tft.setTextSize(1);
+    _tft.setCursor(10, 42);
+    _tft.print("Approve this action?");
+
+    // ── Description box — 108 px tall to maximise readability ─────────────────
+    const int16_t BOX_X = 10, BOX_Y = 54, BOX_W = 220, BOX_H = 108;
+    _tft.fillRect(BOX_X, BOX_Y, BOX_W, BOX_H, C_INPUT_BG);
+    _tft.drawRect(BOX_X, BOX_Y, BOX_W, BOX_H, C_INPUT_BDR);
+
+    const char *disp = (description && strlen(description) > 0) ? description : "<no description>";
+    const int16_t dlen       = (int16_t)strlen(disp);
+    const int16_t CHARS_LINE = 17;   // 17 × 12 px = 204 px fits inside 212 px usable
+    const int16_t CHAR_W     = 12;   // textSize 2: 6-px base × 2
+    const int16_t CHAR_H     = 16;   // textSize 2: 8-px base × 2
+    const int16_t LINE_GAP   = 6;
+
+    _tft.setTextColor(ILI9341_CYAN);
+    _tft.setTextSize(2); // always large — box is now tall enough
+
+    if (dlen <= CHARS_LINE)
+    {
+        // Single line, vertically centred in the box
+        int16_t tx = BOX_X + (BOX_W - dlen * CHAR_W) / 2;
+        int16_t ty = BOX_Y + (BOX_H - CHAR_H) / 2;
+        _tft.setCursor(tx, ty);
+        _tft.print(disp);
+    }
+    else
+    {
+        // Two lines, centred as a group
+        int16_t l2len  = dlen - CHARS_LINE;
+        if (l2len > CHARS_LINE) l2len = CHARS_LINE; // cap at 17
+        int16_t total_h = CHAR_H + LINE_GAP + CHAR_H;
+        int16_t ty1    = BOX_Y + (BOX_H - total_h) / 2;
+        int16_t ty2    = ty1 + CHAR_H + LINE_GAP;
+
+        // Line 1 (always full 17 chars)
+        int16_t tx1 = BOX_X + (BOX_W - CHARS_LINE * CHAR_W) / 2;
+        _tft.setCursor(tx1, ty1);
+        for (int16_t i = 0; i < CHARS_LINE; i++)
+            _tft.print(disp[i]);
+
+        // Line 2
+        int16_t tx2 = BOX_X + (BOX_W - l2len * CHAR_W) / 2;
+        _tft.setCursor(tx2, ty2);
+        for (int16_t i = 0; i < l2len; i++)
+            _tft.print(disp[CHARS_LINE + i]);
+    }
+
+    // ── Warning (single compact line) ─────────────────────────────────────────
+    // Box bottom = BOX_Y(54) + BOX_H(108) = 162
+    _tft.setTextColor(ILI9341_YELLOW);
+    _tft.setTextSize(1);
+    _tft.setCursor(10, 166);
+    _tft.print("Only approve what you requested.");
+    _tft.drawFastHLine(0, 178, _sw, 0x4208);
+
+    // ── Buttons — 44 px tall (down from 62) ──────────────────────────────────
+    const int16_t BTN_X    = 20;
+    const int16_t BTN_W    = 200;
+    const int16_t BTN_H    = 44;
+    const int16_t APPROVE_Y = 186;
+    const int16_t REJECT_Y  = 234; // 186 + 44 + 4 gap
+
+    _tft.fillRoundRect(BTN_X, APPROVE_Y, BTN_W, BTN_H, 6, C_KEY_DONE);
+    _tft.drawRoundRect(BTN_X, APPROVE_Y, BTN_W, BTN_H, 6, ILI9341_WHITE);
+    _tft.setTextColor(ILI9341_WHITE);
+    _tft.setTextSize(2);
+    // "APPROVE" = 7 × 12 = 84 px
+    _tft.setCursor(BTN_X + (BTN_W - 84) / 2, APPROVE_Y + (BTN_H - 16) / 2);
+    _tft.print("APPROVE");
+
+    _tft.fillRoundRect(BTN_X, REJECT_Y, BTN_W, BTN_H, 6, C_KEY_DEL);
+    _tft.drawRoundRect(BTN_X, REJECT_Y, BTN_W, BTN_H, 6, ILI9341_WHITE);
+    _tft.setTextColor(ILI9341_WHITE);
+    _tft.setTextSize(2);
+    // "REJECT" = 6 × 12 = 72 px
+    _tft.setCursor(BTN_X + (BTN_W - 72) / 2, REJECT_Y + (BTN_H - 16) / 2);
+    _tft.print("REJECT");
+
+    // ── Wait for decision ─────────────────────────────────────────────────────
+    while (_ts.touched())
+        ;
+
+    bool prev_touched = false;
+    for (;;)
+    {
+        int16_t sx, sy;
+        bool now_touched = touch_xy(sx, sy);
+
+        if (now_touched && !prev_touched && sx >= BTN_X && sx < BTN_X + BTN_W)
+        {
+            bool approved = false;
+            bool hit = false;
+
+            if (sy >= APPROVE_Y && sy < APPROVE_Y + BTN_H) { approved = true;  hit = true; }
+            if (sy >= REJECT_Y  && sy < REJECT_Y  + BTN_H) { approved = false; hit = true; }
+
+            if (hit)
+            {
+                int16_t fy = approved ? APPROVE_Y : REJECT_Y;
+                _tft.fillRoundRect(BTN_X, fy, BTN_W, BTN_H, 6, C_KEY_PRESS);
+                delay(80);
+                while (_ts.touched())
+                    ;
+                _tft.fillScreen(C_BG);
+                return approved;
+            }
+        }
+
+        prev_touched = now_touched;
+        delay(20);
+    }
+}
+
 bool touch_kb_prompt_credentials(char *username, size_t username_max,
                                  char *password, size_t password_max)
 {

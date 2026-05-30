@@ -16,6 +16,10 @@ void touch_kb_force_calibrate();
 // Returns true if the user presses ACCEPT, false if they press REJECT.
 bool touch_kb_confirm_login(const char *domain);
 
+// Full-screen sensitive-request confirmation screen showing the domain and action description.
+// Returns true if the user presses APPROVE, false if they press REJECT.
+bool touch_kb_confirm_sensitive(const char *domain, const char *description);
+
 // Full-screen username + password prompt.
 // Both buffers are NUL-terminated on return.
 // Returns true when the user presses DONE for both fields.
