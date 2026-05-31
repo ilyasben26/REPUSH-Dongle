@@ -60,6 +60,14 @@ static constexpr size_t SENSITIVE_PAYLOAD_MSG_BYTES     =
     SENSITIVE_NONCE_BYTES + SENSITIVE_DESCRIPTION_BYTES;
 static constexpr size_t SENSITIVE_PAYLOAD_TOTAL_BYTES   = SENSITIVE_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES;
 
+// Phase 2 non-sensitive payload layout:
+//   "sign"(4) + C_Session(16) + N(16) + Server_Sig(64) = 100 bytes
+static constexpr char   SIGN_PAYLOAD_PREFIX[]     = "sign";
+static constexpr size_t SIGN_PAYLOAD_PREFIX_BYTES = 4;
+static constexpr size_t SIGN_PAYLOAD_MSG_BYTES    =
+    SIGN_PAYLOAD_PREFIX_BYTES + ENROLL_CHALLENGE_BYTES + ENROLL_NONCE_BYTES;  // 36
+static constexpr size_t SIGN_PAYLOAD_TOTAL_BYTES  = SIGN_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES;  // 100
+
 static uint8_t ca_pubkey[32] = {0};
 static bool ca_pubkey_loaded = false;
 
@@ -963,6 +971,8 @@ void setup()
   Serial.println("  enroll <cert_b64> <payload_b64>");
   Serial.println("    (PUF queried 10x internally; majority-voted seed used for keygen)");
   Serial.println("  acknowledge <domain> <sig_b64>");
+  Serial.println("  sign_payload <domain> <payload_b64>");
+  Serial.println("    payload: base64( \"sign\"(4) + C_Session(16) + N(16) + ServerSig(64) ) = 100 bytes");
   Serial.println("  sign_sensitive <domain> <payload_b64>");
   Serial.println("    payload: base64( \"sensitive\"(9) + C_Session(16) + N(16) + Desc(32) + ServerSig(64) )");
 }
@@ -1488,6 +1498,88 @@ void loop()
             else
             {
               Serial.println("ACK_OK");
+            }
+          }
+        }
+      }
+    }
+    else if (command_str.startsWith("sign_payload "))
+    {
+      // Phase 2 non-sensitive: SignPayload(Domain, SignaturePayload) — no touchscreen approval.
+      // Command: sign_payload <domain> <payload_b64>
+      // Payload: "sign"(4) + C_Session(16) + N(16) + Server_Sig(64) = 100 bytes
+      int first_space  = command_str.indexOf(' ');
+      int second_space = command_str.indexOf(' ', first_space + 1);
+
+      if (second_space == -1)
+      {
+        Serial.println("Error: Invalid command format.");
+        Serial.println("Expected: sign_payload <domain> <payload_b64>");
+      }
+      else
+      {
+        String domain_str  = command_str.substring(first_space + 1, second_space);
+        String payload_b64 = command_str.substring(second_space + 1);
+
+        uint8_t payload[SIGN_PAYLOAD_TOTAL_BYTES] = {0};
+        size_t  payload_len = 0;
+
+        if (!decode_base64(payload_b64, payload, sizeof(payload), payload_len))
+        {
+          Serial.println("SIGN_PAYLOAD_ERROR: Invalid payload_b64.");
+        }
+        else if (payload_len != SIGN_PAYLOAD_TOTAL_BYTES)
+        {
+          Serial.print("SIGN_PAYLOAD_ERROR: payload must decode to ");
+          Serial.print(SIGN_PAYLOAD_TOTAL_BYTES);
+          Serial.println(" bytes.");
+        }
+        else if (memcmp(payload, SIGN_PAYLOAD_PREFIX, SIGN_PAYLOAD_PREFIX_BYTES) != 0)
+        {
+          Serial.println("SIGN_PAYLOAD_ERROR: payload prefix must be 'sign'.");
+        }
+        else
+        {
+          uint8_t state_index = 0;
+          uint8_t stored_pubkey[32], stored_challenge[16], pk_server[32];
+          if (!fpga_puf_find_state_by_domain(domain_str.c_str(), state_index,
+                                             stored_pubkey, stored_challenge, pk_server))
+          {
+            Serial.println("SIGN_PAYLOAD_ERROR: domain not enrolled on this device.");
+          }
+          else
+          {
+            const uint8_t *server_sig = payload + SIGN_PAYLOAD_MSG_BYTES;
+            if (!Ed25519::verify(server_sig, pk_server, payload, SIGN_PAYLOAD_MSG_BYTES))
+            {
+              Serial.println("SIGN_PAYLOAD_ERROR: server signature verification failed.");
+            }
+            else
+            {
+              const uint8_t *c_session = payload + SIGN_PAYLOAD_PREFIX_BYTES;
+              uint32_t challenge_id =
+                  static_cast<uint32_t>(c_session[0]) |
+                  (static_cast<uint32_t>(c_session[1]) << 8) |
+                  (static_cast<uint32_t>(c_session[2]) << 16) |
+                  (static_cast<uint32_t>(c_session[3]) << 24);
+
+              uint8_t device_privkey[32] = {0};
+              if (!puf_query_match(state_index, challenge_id, stored_pubkey, device_privkey))
+              {
+                Serial.println("SIGN_PAYLOAD_ERROR: PUF error-correction failed.");
+              }
+              else
+              {
+                uint8_t device_sig[64];
+                Ed25519::sign(device_sig, device_privkey, stored_pubkey,
+                              payload, SIGN_PAYLOAD_TOTAL_BYTES);
+                memset(device_privkey, 0, sizeof(device_privkey));
+
+                Serial.print("DEVICE_SIG: ");
+                print_hex_bytes(device_sig, 64);
+                Serial.println();
+                Serial.println("SIGN_PAYLOAD_COMPLETE");
+              }
             }
           }
         }
