@@ -853,6 +853,113 @@ bool touch_kb_confirm_sensitive(const char *domain, const char *description)
     }
 }
 
+bool touch_kb_confirm_reconf(const char *domain)
+{
+    _tft.fillScreen(C_BG);
+
+    // ── Title ─────────────────────────────────────────────────────────────────
+    // "SESSION RENEWAL" = 15 chars × 12 px = 180 px → x = (240-180)/2 = 30
+    _tft.setTextColor(ILI9341_YELLOW);
+    _tft.setTextSize(2);
+    _tft.setCursor(30, 10);
+    _tft.print("SESSION RENEWAL");
+    _tft.drawFastHLine(0, 30, _sw, 0x4208);
+
+    // ── Prompt ────────────────────────────────────────────────────────────────
+    _tft.setTextColor(ILI9341_WHITE);
+    _tft.setTextSize(1);
+    _tft.setCursor(10, 38);
+    _tft.print("Extend session with:");
+
+    // ── Domain box ────────────────────────────────────────────────────────────
+    _tft.fillRect(10, 50, 220, 46, C_INPUT_BG);
+    _tft.drawRect(10, 50, 220, 46, C_INPUT_BDR);
+
+    const char *disp = (domain && strlen(domain) > 0) ? domain : "<unknown>";
+    size_t dlen = strlen(disp);
+    _tft.setTextColor(ILI9341_CYAN);
+    if (dlen <= 17)
+    {
+        _tft.setTextSize(2);
+        int16_t dx = 10 + (220 - (int16_t)(dlen * 12)) / 2;
+        _tft.setCursor(dx, 50 + (46 - 16) / 2);
+    }
+    else
+    {
+        _tft.setTextSize(1);
+        int16_t dx = 10 + (220 - (int16_t)(dlen * 6)) / 2;
+        if (dx < 14) dx = 14;
+        _tft.setCursor(dx, 50 + (46 - 8) / 2);
+    }
+    _tft.print(disp);
+
+    // ── Info text ─────────────────────────────────────────────────────────────
+    _tft.setTextColor(ILI9341_WHITE);
+    _tft.setTextSize(1);
+    _tft.setCursor(10, 108);
+    _tft.print("A new session key will be");
+    _tft.setCursor(10, 120);
+    _tft.print("generated for this domain.");
+    _tft.setCursor(10, 136);
+    _tft.setTextColor(ILI9341_YELLOW);
+    _tft.print("Reject if unexpected.");
+    _tft.drawFastHLine(0, 150, _sw, 0x4208);
+
+    // ── Buttons ───────────────────────────────────────────────────────────────
+    const int16_t BTN_X = 20, BTN_W = 200, BTN_H = 62;
+    const int16_t APPROVE_Y = 162, REJECT_Y = 234;
+
+    _tft.fillRoundRect(BTN_X, APPROVE_Y, BTN_W, BTN_H, 8, C_KEY_DONE);
+    _tft.drawRoundRect(BTN_X, APPROVE_Y, BTN_W, BTN_H, 8, ILI9341_WHITE);
+    _tft.setTextColor(ILI9341_WHITE);
+    _tft.setTextSize(2);
+    // "APPROVE" = 7 × 12 = 84 px
+    _tft.setCursor(BTN_X + (BTN_W - 84) / 2, APPROVE_Y + (BTN_H - 16) / 2);
+    _tft.print("APPROVE");
+
+    _tft.fillRoundRect(BTN_X, REJECT_Y, BTN_W, BTN_H, 8, C_KEY_DEL);
+    _tft.drawRoundRect(BTN_X, REJECT_Y, BTN_W, BTN_H, 8, ILI9341_WHITE);
+    _tft.setTextColor(ILI9341_WHITE);
+    _tft.setTextSize(2);
+    // "REJECT" = 6 × 12 = 72 px
+    _tft.setCursor(BTN_X + (BTN_W - 72) / 2, REJECT_Y + (BTN_H - 16) / 2);
+    _tft.print("REJECT");
+
+    // ── Wait for decision ─────────────────────────────────────────────────────
+    while (_ts.touched())
+        ;
+
+    bool prev_touched = false;
+    for (;;)
+    {
+        int16_t sx, sy;
+        bool now_touched = touch_xy(sx, sy);
+
+        if (now_touched && !prev_touched && sx >= BTN_X && sx < BTN_X + BTN_W)
+        {
+            bool approved = false;
+            bool hit = false;
+
+            if (sy >= APPROVE_Y && sy < APPROVE_Y + BTN_H) { approved = true;  hit = true; }
+            if (sy >= REJECT_Y  && sy < REJECT_Y  + BTN_H) { approved = false; hit = true; }
+
+            if (hit)
+            {
+                int16_t fy = approved ? APPROVE_Y : REJECT_Y;
+                _tft.fillRoundRect(BTN_X, fy, BTN_W, BTN_H, 8, C_KEY_PRESS);
+                delay(80);
+                while (_ts.touched())
+                    ;
+                _tft.fillScreen(C_BG);
+                return approved;
+            }
+        }
+
+        prev_touched = now_touched;
+        delay(20);
+    }
+}
+
 bool touch_kb_prompt_credentials(char *username, size_t username_max,
                                  char *password, size_t password_max)
 {

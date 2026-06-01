@@ -20,6 +20,10 @@ bool touch_kb_confirm_login(const char *domain);
 // Returns true if the user presses APPROVE, false if they press REJECT.
 bool touch_kb_confirm_sensitive(const char *domain, const char *description);
 
+// Full-screen session-renewal confirmation screen.
+// Returns true if the user presses APPROVE, false if they press REJECT.
+bool touch_kb_confirm_reconf(const char *domain);
+
 // Full-screen username + password prompt.
 // Both buffers are NUL-terminated on return.
 // Returns true when the user presses DONE for both fields.

@@ -60,6 +60,16 @@ static constexpr size_t SENSITIVE_PAYLOAD_MSG_BYTES     =
     SENSITIVE_NONCE_BYTES + SENSITIVE_DESCRIPTION_BYTES;
 static constexpr size_t SENSITIVE_PAYLOAD_TOTAL_BYTES   = SENSITIVE_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES;
 
+// Phase 3 reconfiguration payload layout:
+//   "reconf"(6) + C_old(16) + N(16) + C_new(16) + Server_Sig(64) = 118 bytes
+static constexpr char   RECONF_PAYLOAD_PREFIX[]       = "reconf";
+static constexpr size_t RECONF_PAYLOAD_PREFIX_BYTES   = 6;
+static constexpr size_t RECONF_PAYLOAD_MSG_BYTES      =
+    RECONF_PAYLOAD_PREFIX_BYTES + ENROLL_CHALLENGE_BYTES + ENROLL_NONCE_BYTES + ENROLL_CHALLENGE_BYTES; // 54
+static constexpr size_t RECONF_PAYLOAD_TOTAL_BYTES    = RECONF_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES;      // 118
+// ReconfToken plaintext: PK_new(32) + ReconfPayload(118) + device_sig(64) = 214 bytes
+static constexpr size_t RECONF_TOKEN_PLAINTEXT_BYTES  = 32 + RECONF_PAYLOAD_TOTAL_BYTES + CERT_SIG_BYTES; // 214
+
 // Phase 2 non-sensitive payload layout:
 //   "sign"(4) + C_Session(16) + N(16) + Server_Sig(64) = 100 bytes
 static constexpr char   SIGN_PAYLOAD_PREFIX[]     = "sign";
@@ -971,6 +981,9 @@ void setup()
   Serial.println("  enroll <cert_b64> <payload_b64>");
   Serial.println("    (PUF queried 10x internally; majority-voted seed used for keygen)");
   Serial.println("  acknowledge <domain> <sig_b64>");
+  Serial.println("  reconf <domain> <payload_b64>");
+  Serial.println("    payload: base64( \"reconf\"(6)+C_old(16)+N(16)+C_new(16)+ServerSig(64) ) = 118 bytes");
+  Serial.println("  reconf_ack <domain> <sig_b64>");
   Serial.println("  sign_payload <domain> <payload_b64>");
   Serial.println("    payload: base64( \"sign\"(4) + C_Session(16) + N(16) + ServerSig(64) ) = 100 bytes");
   Serial.println("  sign_sensitive <domain> <payload_b64>");
@@ -1498,6 +1511,248 @@ void loop()
             else
             {
               Serial.println("ACK_OK");
+            }
+          }
+        }
+      }
+    }
+    else if (command_str.startsWith("reconf "))
+    {
+      // Phase 3: DongleReconf(Domain, ReconfPayload)
+      // Command: reconf <domain> <payload_b64>
+      // Payload: "reconf"(6)+C_old(16)+N(16)+C_new(16)+Server_Sig(64) = 118 bytes
+      int first_space  = command_str.indexOf(' ');
+      int second_space = command_str.indexOf(' ', first_space + 1);
+
+      if (second_space == -1)
+      {
+        Serial.println("Error: Expected: reconf <domain> <payload_b64>");
+      }
+      else
+      {
+        String domain_str  = command_str.substring(first_space + 1, second_space);
+        String payload_b64 = command_str.substring(second_space + 1);
+
+        uint8_t payload[RECONF_PAYLOAD_TOTAL_BYTES] = {0};
+        size_t  payload_len = 0;
+
+        if (!decode_base64(payload_b64, payload, sizeof(payload), payload_len))
+        {
+          Serial.println("RECONF_ERROR: Invalid payload_b64.");
+        }
+        else if (payload_len != RECONF_PAYLOAD_TOTAL_BYTES)
+        {
+          Serial.print("RECONF_ERROR: payload must be ");
+          Serial.print(RECONF_PAYLOAD_TOTAL_BYTES);
+          Serial.println(" bytes.");
+        }
+        else if (memcmp(payload, RECONF_PAYLOAD_PREFIX, RECONF_PAYLOAD_PREFIX_BYTES) != 0)
+        {
+          Serial.println("RECONF_ERROR: payload prefix must be 'reconf'.");
+        }
+        else
+        {
+          uint8_t state_index = 0;
+          uint8_t stored_pubkey[32], stored_challenge[16], pk_server[32];
+          if (!fpga_puf_find_state_by_domain(domain_str.c_str(), state_index,
+                                             stored_pubkey, stored_challenge, pk_server))
+          {
+            Serial.println("RECONF_ERROR: domain not enrolled on this device.");
+          }
+          else
+          {
+            // Verify server signature on the 54-byte message portion
+            const uint8_t *server_sig = payload + RECONF_PAYLOAD_MSG_BYTES;
+            if (!Ed25519::verify(server_sig, pk_server, payload, RECONF_PAYLOAD_MSG_BYTES))
+            {
+              Serial.println("RECONF_ERROR: server signature verification failed.");
+            }
+            else
+            {
+              // Show session renewal prompt — user must explicitly approve
+              if (!touch_kb_confirm_reconf(domain_str.c_str()))
+              {
+                Serial.println("RECONF_REJECTED");
+              }
+              else
+              {
+                // Extract C_old (bytes [6..21]) and C_new (bytes [38..53])
+                const uint8_t *c_old = payload + RECONF_PAYLOAD_PREFIX_BYTES;
+                const uint8_t *c_new = payload + RECONF_PAYLOAD_PREFIX_BYTES
+                                       + ENROLL_CHALLENGE_BYTES + ENROLL_NONCE_BYTES;
+
+                uint32_t challenge_id_old =
+                    static_cast<uint32_t>(c_old[0]) | (static_cast<uint32_t>(c_old[1]) << 8) |
+                    (static_cast<uint32_t>(c_old[2]) << 16) | (static_cast<uint32_t>(c_old[3]) << 24);
+
+                uint32_t challenge_id_new =
+                    static_cast<uint32_t>(c_new[0]) | (static_cast<uint32_t>(c_new[1]) << 8) |
+                    (static_cast<uint32_t>(c_new[2]) << 16) | (static_cast<uint32_t>(c_new[3]) << 24);
+
+                // Step 1: re-derive current SK_i via Phase 2 error correction
+                uint8_t sk_old[32] = {0};
+                if (!puf_query_match(state_index, challenge_id_old, stored_pubkey, sk_old))
+                {
+                  Serial.println("RECONF_ERROR: failed to reproduce current key.");
+                }
+                else
+                {
+                  // Step 2: reconfigure FPGA state → S^{i+1}
+                  uint32_t new_seed = generateRandomSeed();
+                  if (!fpga_puf_reconfigure_state(state_index, new_seed))
+                  {
+                    memset(sk_old, 0, sizeof(sk_old));
+                    Serial.println("RECONF_ERROR: FPGA reconfiguration failed.");
+                  }
+                  else
+                  {
+                    // Step 3: derive new key pair under S^{i+1} with majority voting
+                    uint8_t sk_new[32] = {0};
+                    if (!fpga_puf_challenge_lr(state_index, challenge_id_new,
+                                               sk_new, ENROLL_PUF_SAMPLES))
+                    {
+                      memset(sk_old, 0, sizeof(sk_old));
+                      Serial.println("RECONF_ERROR: new LR-PUF challenge failed.");
+                    }
+                    else
+                    {
+                      uint8_t pk_new[32];
+                      Ed25519::derivePublicKey(pk_new, sk_new);
+
+                      // Step 4: sign { PK_new(32) || ReconfPayload(118) } with SK_old
+                      uint8_t to_sign[32 + RECONF_PAYLOAD_TOTAL_BYTES];
+                      memcpy(to_sign,      pk_new,  32);
+                      memcpy(to_sign + 32, payload, RECONF_PAYLOAD_TOTAL_BYTES);
+                      uint8_t device_sig[64];
+                      Ed25519::sign(device_sig, sk_old, stored_pubkey,
+                                    to_sign, sizeof(to_sign));
+                      memset(sk_old, 0, sizeof(sk_old));
+
+                      // Step 5: ECIES encrypt { PK_new(32) || ReconfPayload(118) || device_sig(64) }
+                      const uint8_t *server_ed25519_pk = pk_server;
+                      uint8_t server_x25519_pk[32];
+                      ed25519_pk_to_x25519(server_x25519_pk, server_ed25519_pk);
+
+                      uint8_t eph_priv[32];
+                      fill_random(eph_priv, sizeof(eph_priv));
+                      uint8_t eph_pub[32];
+                      Curve25519::dh1(eph_pub, eph_priv);
+
+                      uint8_t shared[32];
+                      memcpy(shared, server_x25519_pk, 32);
+                      Curve25519::dh2(shared, eph_priv);
+
+                      SHA256 sha256;
+                      uint8_t enc_key[32];
+                      sha256.reset();
+                      sha256.update(shared, 32);
+                      sha256.update(eph_pub, 32);
+                      sha256.finalize(enc_key, 32);
+                      memset(shared, 0, sizeof(shared));
+                      memset(eph_priv, 0, sizeof(eph_priv));
+
+                      uint8_t plaintext[RECONF_TOKEN_PLAINTEXT_BYTES];
+                      memcpy(plaintext,       pk_new,     32);
+                      memcpy(plaintext + 32,  payload,    RECONF_PAYLOAD_TOTAL_BYTES);
+                      memcpy(plaintext + 32 + RECONF_PAYLOAD_TOTAL_BYTES, device_sig, 64);
+
+                      uint8_t enc_nonce[12];
+                      fill_random(enc_nonce, sizeof(enc_nonce));
+
+                      ChaChaPoly aead;
+                      uint8_t ciphertext[RECONF_TOKEN_PLAINTEXT_BYTES];
+                      uint8_t tag[16];
+                      aead.setKey(enc_key, 32);
+                      aead.setIV(enc_nonce, 12);
+                      aead.encrypt(ciphertext, plaintext, sizeof(plaintext));
+                      aead.computeTag(tag, 16);
+                      memset(enc_key, 0, sizeof(enc_key));
+                      memset(plaintext, 0, sizeof(plaintext));
+
+                      // Step 6: persist new enrollment to FPGA SD
+                      if (!fpga_puf_set_domain(state_index, domain_str.c_str())          ||
+                          !fpga_puf_store_enrollment(state_index, pk_new, c_new, pk_server) ||
+                          !fpga_puf_save_states())
+                      {
+                        memset(sk_new, 0, sizeof(sk_new));
+                        Serial.println("RECONF_ERROR: failed to persist new state on FPGA.");
+                      }
+                      else
+                      {
+                        memset(sk_new, 0, sizeof(sk_new));
+
+                        Serial.print("RECONF_TOKEN: ");
+                        print_hex_bytes(eph_pub, 32);
+                        print_hex_bytes(enc_nonce, 12);
+                        print_hex_bytes(ciphertext, sizeof(ciphertext));
+                        print_hex_bytes(tag, 16);
+                        Serial.println();
+                        Serial.println("RECONF_COMPLETE");
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    else if (command_str.startsWith("reconf_ack "))
+    {
+      // Phase 3: AckReconf(Domain, ReconfAck)
+      // Command: reconf_ack <domain> <sig_b64>
+      // Ack message = PK_{i+1}(32) || C^{i+1}_Session(16) || domain_padded(32) = 80 bytes
+      // (same binary format as Phase 1 'acknowledge')
+      int first_space  = command_str.indexOf(' ');
+      int second_space = command_str.indexOf(' ', first_space + 1);
+
+      if (second_space == -1)
+      {
+        Serial.println("Error: Expected: reconf_ack <domain> <sig_b64>");
+      }
+      else
+      {
+        String domain_str = command_str.substring(first_space + 1, second_space);
+        String sig_b64    = command_str.substring(second_space + 1);
+
+        uint8_t sig[64];
+        size_t  sig_len = 0;
+        if (!decode_base64(sig_b64, sig, sizeof(sig), sig_len) || sig_len != 64)
+        {
+          Serial.println("RECONF_ACK_BAD: sig_b64 must decode to 64 bytes.");
+        }
+        else
+        {
+          uint8_t state_index = 0;
+          uint8_t ack_pubkey[32], ack_challenge[16], ack_pk_server[32];
+          if (!fpga_puf_find_state_by_domain(domain_str.c_str(), state_index,
+                                             ack_pubkey, ack_challenge, ack_pk_server))
+          {
+            Serial.println("RECONF_ACK_BAD: domain not found on this device.");
+          }
+          else
+          {
+            // Ack message: PK_{i+1}(32) || C^{i+1}_Session(16) || domain_padded(32)
+            uint8_t ack_msg[80];
+            memcpy(ack_msg,      ack_pubkey,    32);
+            memcpy(ack_msg + 32, ack_challenge, 16);
+            memset(ack_msg + 48, 0, 32);
+            size_t dlen = domain_str.length();
+            if (dlen > 32) dlen = 32;
+            memcpy(ack_msg + 48, domain_str.c_str(), dlen);
+
+            if (!Ed25519::verify(sig, ack_pk_server, ack_msg, sizeof(ack_msg)))
+            {
+              Serial.println("RECONF_ACK_BAD: signature verification failed.");
+            }
+            else if (!fpga_puf_mark_acknowledged(state_index))
+            {
+              Serial.println("RECONF_ACK_BAD: failed to mark acknowledged on FPGA.");
+            }
+            else
+            {
+              Serial.println("RECONF_ACK_OK");
             }
           }
         }
