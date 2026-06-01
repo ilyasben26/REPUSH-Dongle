@@ -288,7 +288,14 @@ bool fpga_rpc(uint8_t cmd, const uint8_t *request_payload, uint16_t request_len,
         break; // timed out on this attempt — go to next retry
 
       if (response.seq == tx_seq && response.cmd == cmd)
+      {
+        // Give the FPGA ~30 ms to finish any trailing debug uart_puts output
+        // that arrives after the protocol frame, then flush it so it cannot
+        // corrupt the next command's frame parsing.
+        delay(30);
+        fpga_flush_rx();
         return true;
+      }
       // wrong seq/cmd: keep waiting (may be a stale frame from a prior op)
     }
   }
