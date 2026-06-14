@@ -14,7 +14,7 @@ struct CalibData
 static const uint32_t CALIB_MAGIC = 0xCA11B0U;
 FlashStorage(calib_flash, CalibData);
 
-// Hardware pins — must match physical wiring (same as working_touch_game.ino)
+// Hardware pins
 #define TKB_TFT_CS 10
 #define TKB_TFT_DC 9
 #define TKB_TFT_RST 8
@@ -733,8 +733,10 @@ bool touch_kb_confirm_sensitive(const char *domain, const char *description)
     const char *dom = (domain && strlen(domain) > 0) ? domain : "unknown";
     // Truncate to 30 chars so "From: " + domain stays within 220 px
     size_t domlen = strlen(dom);
-    if (domlen > 30) domlen = 30;
-    for (size_t i = 0; i < domlen; i++) _tft.print(dom[i]);
+    if (domlen > 30)
+        domlen = 30;
+    for (size_t i = 0; i < domlen; i++)
+        _tft.print(dom[i]);
 
     // ── Subtitle ──────────────────────────────────────────────────────────────
     _tft.setTextColor(ILI9341_WHITE);
@@ -748,11 +750,11 @@ bool touch_kb_confirm_sensitive(const char *domain, const char *description)
     _tft.drawRect(BOX_X, BOX_Y, BOX_W, BOX_H, C_INPUT_BDR);
 
     const char *disp = (description && strlen(description) > 0) ? description : "<no description>";
-    const int16_t dlen       = (int16_t)strlen(disp);
-    const int16_t CHARS_LINE = 17;   // 17 × 12 px = 204 px fits inside 212 px usable
-    const int16_t CHAR_W     = 12;   // textSize 2: 6-px base × 2
-    const int16_t CHAR_H     = 16;   // textSize 2: 8-px base × 2
-    const int16_t LINE_GAP   = 6;
+    const int16_t dlen = (int16_t)strlen(disp);
+    const int16_t CHARS_LINE = 17; // 17 × 12 px = 204 px fits inside 212 px usable
+    const int16_t CHAR_W = 12;     // textSize 2: 6-px base × 2
+    const int16_t CHAR_H = 16;     // textSize 2: 8-px base × 2
+    const int16_t LINE_GAP = 6;
 
     _tft.setTextColor(ILI9341_CYAN);
     _tft.setTextSize(2); // always large — box is now tall enough
@@ -768,11 +770,12 @@ bool touch_kb_confirm_sensitive(const char *domain, const char *description)
     else
     {
         // Two lines, centred as a group
-        int16_t l2len  = dlen - CHARS_LINE;
-        if (l2len > CHARS_LINE) l2len = CHARS_LINE; // cap at 17
+        int16_t l2len = dlen - CHARS_LINE;
+        if (l2len > CHARS_LINE)
+            l2len = CHARS_LINE; // cap at 17
         int16_t total_h = CHAR_H + LINE_GAP + CHAR_H;
-        int16_t ty1    = BOX_Y + (BOX_H - total_h) / 2;
-        int16_t ty2    = ty1 + CHAR_H + LINE_GAP;
+        int16_t ty1 = BOX_Y + (BOX_H - total_h) / 2;
+        int16_t ty2 = ty1 + CHAR_H + LINE_GAP;
 
         // Line 1 (always full 17 chars)
         int16_t tx1 = BOX_X + (BOX_W - CHARS_LINE * CHAR_W) / 2;
@@ -796,11 +799,11 @@ bool touch_kb_confirm_sensitive(const char *domain, const char *description)
     _tft.drawFastHLine(0, 178, _sw, 0x4208);
 
     // ── Buttons — 44 px tall (down from 62) ──────────────────────────────────
-    const int16_t BTN_X    = 20;
-    const int16_t BTN_W    = 200;
-    const int16_t BTN_H    = 44;
+    const int16_t BTN_X = 20;
+    const int16_t BTN_W = 200;
+    const int16_t BTN_H = 44;
     const int16_t APPROVE_Y = 186;
-    const int16_t REJECT_Y  = 234; // 186 + 44 + 4 gap
+    const int16_t REJECT_Y = 234; // 186 + 44 + 4 gap
 
     _tft.fillRoundRect(BTN_X, APPROVE_Y, BTN_W, BTN_H, 6, C_KEY_DONE);
     _tft.drawRoundRect(BTN_X, APPROVE_Y, BTN_W, BTN_H, 6, ILI9341_WHITE);
@@ -833,8 +836,16 @@ bool touch_kb_confirm_sensitive(const char *domain, const char *description)
             bool approved = false;
             bool hit = false;
 
-            if (sy >= APPROVE_Y && sy < APPROVE_Y + BTN_H) { approved = true;  hit = true; }
-            if (sy >= REJECT_Y  && sy < REJECT_Y  + BTN_H) { approved = false; hit = true; }
+            if (sy >= APPROVE_Y && sy < APPROVE_Y + BTN_H)
+            {
+                approved = true;
+                hit = true;
+            }
+            if (sy >= REJECT_Y && sy < REJECT_Y + BTN_H)
+            {
+                approved = false;
+                hit = true;
+            }
 
             if (hit)
             {
@@ -888,7 +899,8 @@ bool touch_kb_confirm_reconf(const char *domain)
     {
         _tft.setTextSize(1);
         int16_t dx = 10 + (220 - (int16_t)(dlen * 6)) / 2;
-        if (dx < 14) dx = 14;
+        if (dx < 14)
+            dx = 14;
         _tft.setCursor(dx, 50 + (46 - 8) / 2);
     }
     _tft.print(disp);
@@ -940,8 +952,16 @@ bool touch_kb_confirm_reconf(const char *domain)
             bool approved = false;
             bool hit = false;
 
-            if (sy >= APPROVE_Y && sy < APPROVE_Y + BTN_H) { approved = true;  hit = true; }
-            if (sy >= REJECT_Y  && sy < REJECT_Y  + BTN_H) { approved = false; hit = true; }
+            if (sy >= APPROVE_Y && sy < APPROVE_Y + BTN_H)
+            {
+                approved = true;
+                hit = true;
+            }
+            if (sy >= REJECT_Y && sy < REJECT_Y + BTN_H)
+            {
+                approved = false;
+                hit = true;
+            }
 
             if (hit)
             {
