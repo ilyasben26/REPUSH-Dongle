@@ -31,6 +31,8 @@ static constexpr uint8_t PROTO_CMD_PUF_FIND_STATE_BY_DOMAIN  = 11;
 static constexpr uint8_t PROTO_CMD_PUF_MARK_ACKNOWLEDGED     = 12;
 static constexpr uint8_t PROTO_CMD_PUF_CLEAR_STATES          = 13;
 static constexpr uint8_t PROTO_CMD_PUF_GET_SLOT_STATUS       = 14;
+static constexpr uint8_t PROTO_CMD_PUF_BCH_ENROLL            = 15;
+static constexpr uint8_t PROTO_CMD_PUF_BCH_QUERY             = 16;
 static constexpr size_t PROTO_MAX_PAYLOAD = 96;
 static constexpr size_t CERT_DOMAIN_BYTES = 32;
 static constexpr size_t CERT_PK_SERVER_BYTES = 32;
@@ -44,9 +46,7 @@ static constexpr size_t ENROLL_NONCE_BYTES = 16;
 static constexpr size_t ENROLL_PAYLOAD_MSG_BYTES = ENROLL_PAYLOAD_PREFIX_BYTES + ENROLL_CHALLENGE_BYTES + ENROLL_NONCE_BYTES;
 static constexpr size_t ENROLL_PAYLOAD_TOTAL_BYTES = ENROLL_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES;
 
-// Error-correction parameters
-static constexpr uint8_t ENROLL_PUF_SAMPLES  = 10; // per-bit majority-vote samples during enrolment
-static constexpr uint8_t QUERY_PUF_MAX_TRIES = 20; // max re-query attempts during Phase 2 signing
+static constexpr uint8_t ENROLL_PUF_SAMPLES = 10;
 
 // Phase 2 sensitive payload layout (all sizes in bytes):
 //   "sensitive"(9) + C_Session(16) + N(16) + Description(32) + Server_Sig(64) = 137
@@ -624,6 +624,80 @@ bool fpga_puf_challenge_lr(uint8_t state_index, uint32_t challenge_id, uint8_t o
   return true;
 }
 
+bool fpga_puf_bch_enroll(uint8_t state_index, uint32_t challenge_id, uint8_t vote_count, uint8_t out[32])
+{
+  uint8_t req[6];
+  ProtoFrame response = {};
+  req[0] = state_index;
+  req[1] = static_cast<uint8_t>(challenge_id & 0xFF);
+  req[2] = static_cast<uint8_t>((challenge_id >> 8) & 0xFF);
+  req[3] = static_cast<uint8_t>((challenge_id >> 16) & 0xFF);
+  req[4] = static_cast<uint8_t>((challenge_id >> 24) & 0xFF);
+  req[5] = (vote_count == 0) ? 1 : vote_count;
+  uint32_t timeout_ms = 12000u + 500u * static_cast<uint32_t>(req[5]);
+  if (!fpga_rpc(PROTO_CMD_PUF_BCH_ENROLL, req, sizeof(req), response, timeout_ms))
+  {
+    Serial.println("Error: fpga_puf_bch_enroll timeout.");
+    return false;
+  }
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.println("Error: FPGA rejected BCH enroll.");
+    return false;
+  }
+  if (response.len < 32)
+  {
+    Serial.println("Error: fpga_puf_bch_enroll short response.");
+    return false;
+  }
+  memcpy(out, response.payload, 32);
+  return true;
+}
+
+bool fpga_puf_bch_query(uint8_t state_index, uint32_t challenge_id, uint8_t out[32])
+{
+  uint8_t req[5];
+  ProtoFrame response = {};
+  req[0] = state_index;
+  req[1] = static_cast<uint8_t>(challenge_id & 0xFF);
+  req[2] = static_cast<uint8_t>((challenge_id >> 8) & 0xFF);
+  req[3] = static_cast<uint8_t>((challenge_id >> 16) & 0xFF);
+  req[4] = static_cast<uint8_t>((challenge_id >> 24) & 0xFF);
+  if (!fpga_rpc(PROTO_CMD_PUF_BCH_QUERY, req, sizeof(req), response, 8000))
+  {
+    Serial.println("Error: fpga_puf_bch_query timeout.");
+    return false;
+  }
+  if (response.msg_type == PROTO_MSG_ERR)
+  {
+    Serial.println("Error: FPGA BCH query failed (uncorrectable PUF errors).");
+    return false;
+  }
+  if (response.len < 32)
+  {
+    Serial.println("Error: fpga_puf_bch_query short response.");
+    return false;
+  }
+  memcpy(out, response.payload, 32);
+  return true;
+}
+
+static bool fpga_puf_bch_query_retry(uint8_t state_index, uint32_t challenge_id,
+                                      uint8_t out[32], int max_tries = 3)
+{
+  for (int i = 0; i < max_tries; i++) {
+    if (fpga_puf_bch_query(state_index, challenge_id, out))
+      return true;
+    if (i + 1 < max_tries) {
+      Serial.print("[BCH] uncorrectable errors, retry ");
+      Serial.print(i + 1);
+      Serial.print("/");
+      Serial.println(max_tries - 1);
+    }
+  }
+  return false;
+}
+
 bool fpga_puf_set_domain(uint8_t state_index, const char *domain)
 {
   uint8_t req[1 + 32];
@@ -732,44 +806,6 @@ bool fpga_puf_get_slot_status(uint8_t state_index,
   return true;
 }
 
-// Phase 2 error correction: re-query the LR-PUF (count=1 each time) until the
-// derived Ed25519 public key matches the pubkey stored on the FPGA during enrolment.
-// Returns true and fills out_privkey on success; false after QUERY_PUF_MAX_TRIES.
-static bool puf_query_match(uint8_t state_index, uint32_t challenge_id,
-                             const uint8_t stored_pubkey[32], uint8_t out_privkey[32])
-{
-  for (int attempt = 1; attempt <= QUERY_PUF_MAX_TRIES; attempt++)
-  {
-    uint8_t seed[32] = {0};
-    if (!fpga_puf_challenge_lr(state_index, challenge_id, seed))
-    {
-      Serial.print("[PUF-EC] Attempt ");
-      Serial.print(attempt);
-      Serial.println(": FPGA error, retrying...");
-      continue;
-    }
-
-    uint8_t derived_pk[32];
-    Ed25519::derivePublicKey(derived_pk, seed);
-
-    if (memcmp(derived_pk, stored_pubkey, 32) == 0)
-    {
-      Serial.print("[PUF-EC] Key reproduced on attempt ");
-      Serial.println(attempt);
-      memcpy(out_privkey, seed, 32);
-      memset(seed, 0, sizeof(seed));
-      return true;
-    }
-
-    Serial.print("[PUF-EC] Attempt ");
-    Serial.print(attempt);
-    Serial.println(": pubkey mismatch, retrying...");
-    memset(seed, 0, sizeof(seed));
-  }
-
-  Serial.println("[PUF-EC] Error: key not reproduced within max attempts.");
-  return false;
-}
 
 bool verify_cert_locally(const uint8_t *cert, size_t cert_len)
 {
@@ -1330,12 +1366,12 @@ void loop()
                     (static_cast<uint32_t>(payload[7]) << 16) |
                     (static_cast<uint32_t>(payload[8]) << 24);
 
-                // Step 4: run LR-PUF challenge with per-bit majority voting (ENROLL_PUF_SAMPLES
-                // raw measurements voted inside the FPGA) for a stable enrollment seed.
+                // Step 4: BCH fuzzy commitment enroll — majority-voted PUF measurement,
+                // derives W, stores helper+ECC to SD, returns deterministic seed.
                 uint8_t device_privkey[32] = {0};
-                if (!fpga_puf_challenge_lr(state_index, challenge_id, device_privkey, ENROLL_PUF_SAMPLES))
+                if (!fpga_puf_bch_enroll(state_index, challenge_id, ENROLL_PUF_SAMPLES, device_privkey))
                 {
-                  Serial.println("ENROLL_ERROR: LR-PUF challenge failed");
+                  Serial.println("ENROLL_ERROR: BCH enroll failed");
                   return;
                 }
 
@@ -1596,11 +1632,11 @@ void loop()
                     static_cast<uint32_t>(c_new[0]) | (static_cast<uint32_t>(c_new[1]) << 8) |
                     (static_cast<uint32_t>(c_new[2]) << 16) | (static_cast<uint32_t>(c_new[3]) << 24);
 
-                // Step 1: re-derive current SK_i via Phase 2 error correction
+                // Step 1: re-derive current SK_i via BCH query (deterministic)
                 uint8_t sk_old[32] = {0};
-                if (!puf_query_match(state_index, challenge_id_old, stored_pubkey, sk_old))
+                if (!fpga_puf_bch_query_retry(state_index, challenge_id_old, sk_old))
                 {
-                  Serial.println("RECONF_ERROR: failed to reproduce current key.");
+                  Serial.println("RECONF_ERROR: BCH PUF query for current key failed.");
                 }
                 else
                 {
@@ -1613,13 +1649,13 @@ void loop()
                   }
                   else
                   {
-                    // Step 3: derive new key pair under S^{i+1} with majority voting
+                    // Step 3: BCH enroll new key pair under S^{i+1}
                     uint8_t sk_new[32] = {0};
-                    if (!fpga_puf_challenge_lr(state_index, challenge_id_new,
-                                               sk_new, ENROLL_PUF_SAMPLES))
+                    if (!fpga_puf_bch_enroll(state_index, challenge_id_new,
+                                              ENROLL_PUF_SAMPLES, sk_new))
                     {
                       memset(sk_old, 0, sizeof(sk_old));
-                      Serial.println("RECONF_ERROR: new LR-PUF challenge failed.");
+                      Serial.println("RECONF_ERROR: BCH enroll for new key failed.");
                     }
                     else
                     {
@@ -1826,9 +1862,9 @@ void loop()
                   (static_cast<uint32_t>(c_session[3]) << 24);
 
               uint8_t device_privkey[32] = {0};
-              if (!puf_query_match(state_index, challenge_id, stored_pubkey, device_privkey))
+              if (!fpga_puf_bch_query_retry(state_index, challenge_id, device_privkey))
               {
-                Serial.println("SIGN_PAYLOAD_ERROR: PUF error-correction failed.");
+                Serial.println("SIGN_PAYLOAD_ERROR: BCH PUF query failed.");
               }
               else
               {
@@ -1927,11 +1963,10 @@ void loop()
               }
               else
               {
-                // Phase 2 error correction: retry PUF queries until derived PK matches stored PK
                 uint8_t device_privkey[32] = {0};
-                if (!puf_query_match(state_index, challenge_id, stored_pubkey, device_privkey))
+                if (!fpga_puf_bch_query_retry(state_index, challenge_id, device_privkey))
                 {
-                  Serial.println("SIGN_ERROR: PUF error-correction failed.");
+                  Serial.println("SIGN_ERROR: BCH PUF query failed.");
                 }
                 else
                 {
