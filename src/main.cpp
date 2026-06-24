@@ -21,18 +21,18 @@ static constexpr uint8_t PROTO_CMD_PING = 1;
 static constexpr uint8_t PROTO_CMD_GET_INFO = 2;
 static constexpr uint8_t PROTO_CMD_GET_TIME = 3;
 static constexpr uint8_t PROTO_CMD_GET_CA_KEY = 4;
-static constexpr uint8_t PROTO_CMD_PUF_GET_FREE_STATE    = 5;
+static constexpr uint8_t PROTO_CMD_PUF_GET_FREE_STATE = 5;
 static constexpr uint8_t PROTO_CMD_PUF_RECONFIGURE_STATE = 6;
-static constexpr uint8_t PROTO_CMD_PUF_CHALLENGE_LR      = 7;
-static constexpr uint8_t PROTO_CMD_PUF_SET_DOMAIN        = 8;
-static constexpr uint8_t PROTO_CMD_PUF_STORE_ENROLLMENT  = 9;
-static constexpr uint8_t PROTO_CMD_PUF_SAVE_STATES           = 10;
-static constexpr uint8_t PROTO_CMD_PUF_FIND_STATE_BY_DOMAIN  = 11;
-static constexpr uint8_t PROTO_CMD_PUF_MARK_ACKNOWLEDGED     = 12;
-static constexpr uint8_t PROTO_CMD_PUF_CLEAR_STATES          = 13;
-static constexpr uint8_t PROTO_CMD_PUF_GET_SLOT_STATUS       = 14;
-static constexpr uint8_t PROTO_CMD_PUF_BCH_ENROLL            = 15;
-static constexpr uint8_t PROTO_CMD_PUF_BCH_QUERY             = 16;
+static constexpr uint8_t PROTO_CMD_PUF_CHALLENGE_LR = 7;
+static constexpr uint8_t PROTO_CMD_PUF_SET_DOMAIN = 8;
+static constexpr uint8_t PROTO_CMD_PUF_STORE_ENROLLMENT = 9;
+static constexpr uint8_t PROTO_CMD_PUF_SAVE_STATES = 10;
+static constexpr uint8_t PROTO_CMD_PUF_FIND_STATE_BY_DOMAIN = 11;
+static constexpr uint8_t PROTO_CMD_PUF_MARK_ACKNOWLEDGED = 12;
+static constexpr uint8_t PROTO_CMD_PUF_CLEAR_STATES = 13;
+static constexpr uint8_t PROTO_CMD_PUF_GET_SLOT_STATUS = 14;
+static constexpr uint8_t PROTO_CMD_PUF_BCH_ENROLL = 15;
+static constexpr uint8_t PROTO_CMD_PUF_BCH_QUERY = 16;
 static constexpr size_t PROTO_MAX_PAYLOAD = 96;
 static constexpr size_t CERT_DOMAIN_BYTES = 32;
 static constexpr size_t CERT_PK_SERVER_BYTES = 32;
@@ -50,33 +50,33 @@ static constexpr uint8_t ENROLL_PUF_SAMPLES = 10;
 
 // Phase 2 sensitive payload layout (all sizes in bytes):
 //   "sensitive"(9) + C_Session(16) + N(16) + Description(32) + Server_Sig(64) = 137
-static constexpr char   SENSITIVE_PAYLOAD_PREFIX[]      = "sensitive";
-static constexpr size_t SENSITIVE_PAYLOAD_PREFIX_BYTES  = 9;
-static constexpr size_t SENSITIVE_CHALLENGE_BYTES       = 16;
-static constexpr size_t SENSITIVE_NONCE_BYTES           = 16;
-static constexpr size_t SENSITIVE_DESCRIPTION_BYTES     = 32;
-static constexpr size_t SENSITIVE_PAYLOAD_MSG_BYTES     =
+static constexpr char SENSITIVE_PAYLOAD_PREFIX[] = "sensitive";
+static constexpr size_t SENSITIVE_PAYLOAD_PREFIX_BYTES = 9;
+static constexpr size_t SENSITIVE_CHALLENGE_BYTES = 16;
+static constexpr size_t SENSITIVE_NONCE_BYTES = 16;
+static constexpr size_t SENSITIVE_DESCRIPTION_BYTES = 32;
+static constexpr size_t SENSITIVE_PAYLOAD_MSG_BYTES =
     SENSITIVE_PAYLOAD_PREFIX_BYTES + SENSITIVE_CHALLENGE_BYTES +
     SENSITIVE_NONCE_BYTES + SENSITIVE_DESCRIPTION_BYTES;
-static constexpr size_t SENSITIVE_PAYLOAD_TOTAL_BYTES   = SENSITIVE_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES;
+static constexpr size_t SENSITIVE_PAYLOAD_TOTAL_BYTES = SENSITIVE_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES;
 
 // Phase 3 reconfiguration payload layout:
 //   "reconf"(6) + C_old(16) + N(16) + C_new(16) + Server_Sig(64) = 118 bytes
-static constexpr char   RECONF_PAYLOAD_PREFIX[]       = "reconf";
-static constexpr size_t RECONF_PAYLOAD_PREFIX_BYTES   = 6;
-static constexpr size_t RECONF_PAYLOAD_MSG_BYTES      =
+static constexpr char RECONF_PAYLOAD_PREFIX[] = "reconf";
+static constexpr size_t RECONF_PAYLOAD_PREFIX_BYTES = 6;
+static constexpr size_t RECONF_PAYLOAD_MSG_BYTES =
     RECONF_PAYLOAD_PREFIX_BYTES + ENROLL_CHALLENGE_BYTES + ENROLL_NONCE_BYTES + ENROLL_CHALLENGE_BYTES; // 54
-static constexpr size_t RECONF_PAYLOAD_TOTAL_BYTES    = RECONF_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES;      // 118
+static constexpr size_t RECONF_PAYLOAD_TOTAL_BYTES = RECONF_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES;         // 118
 // ReconfToken plaintext: PK_new(32) + ReconfPayload(118) + device_sig(64) = 214 bytes
-static constexpr size_t RECONF_TOKEN_PLAINTEXT_BYTES  = 32 + RECONF_PAYLOAD_TOTAL_BYTES + CERT_SIG_BYTES; // 214
+static constexpr size_t RECONF_TOKEN_PLAINTEXT_BYTES = 32 + RECONF_PAYLOAD_TOTAL_BYTES + CERT_SIG_BYTES; // 214
 
 // Phase 2 non-sensitive payload layout:
 //   "sign"(4) + C_Session(16) + N(16) + Server_Sig(64) = 100 bytes
-static constexpr char   SIGN_PAYLOAD_PREFIX[]     = "sign";
+static constexpr char SIGN_PAYLOAD_PREFIX[] = "sign";
 static constexpr size_t SIGN_PAYLOAD_PREFIX_BYTES = 4;
-static constexpr size_t SIGN_PAYLOAD_MSG_BYTES    =
-    SIGN_PAYLOAD_PREFIX_BYTES + ENROLL_CHALLENGE_BYTES + ENROLL_NONCE_BYTES;  // 36
-static constexpr size_t SIGN_PAYLOAD_TOTAL_BYTES  = SIGN_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES;  // 100
+static constexpr size_t SIGN_PAYLOAD_MSG_BYTES =
+    SIGN_PAYLOAD_PREFIX_BYTES + ENROLL_CHALLENGE_BYTES + ENROLL_NONCE_BYTES;                // 36
+static constexpr size_t SIGN_PAYLOAD_TOTAL_BYTES = SIGN_PAYLOAD_MSG_BYTES + CERT_SIG_BYTES; // 100
 
 static uint8_t ca_pubkey[32] = {0};
 static bool ca_pubkey_loaded = false;
@@ -209,7 +209,7 @@ bool fpga_read_frame(ProtoFrame &frame, uint32_t timeout_ms)
         frame.msg_type = header[1];
         frame.seq = header[2];
         frame.cmd = header[3];
-        frame.len = static_cast<uint16_t>(header[4]) | (static_cast<uint16_t>(header[5]) << 8);
+        frame.len = static_cast<uint16_t>(header[4]) | (static_cast<uint16_t>(header[5]) << 8); // little-endian to big-endian
 
         if (frame.version != PROTO_VERSION || frame.len > PROTO_MAX_PAYLOAD)
         {
@@ -252,7 +252,7 @@ bool fpga_read_frame(ProtoFrame &frame, uint32_t timeout_ms)
   return false;
 }
 
-static constexpr int     FPGA_RPC_MAX_RETRIES  = 3;
+static constexpr int FPGA_RPC_MAX_RETRIES = 3;
 static constexpr uint32_t FPGA_RPC_RETRY_DELAY = 150; // ms between retries
 
 bool fpga_rpc(uint8_t cmd, const uint8_t *request_payload, uint16_t request_len, ProtoFrame &response, uint32_t timeout_ms)
@@ -275,8 +275,8 @@ bool fpga_rpc(uint8_t cmd, const uint8_t *request_payload, uint16_t request_len,
       Serial.println(cmd, HEX);
     }
 
-    uint8_t  tx_seq = seq++;
-    uint32_t start  = millis();
+    uint8_t tx_seq = seq++;
+    uint32_t start = millis();
 
     fpga_flush_rx();
     fpga_send_frame(PROTO_MSG_REQ, tx_seq, cmd, request_payload, request_len);
@@ -388,14 +388,15 @@ static void fill_random(uint8_t *buf, size_t len)
 }
 
 bool fpga_puf_find_state_by_domain(const char *domain,
-                                    uint8_t &state_index,
-                                    uint8_t pubkey[32],
-                                    uint8_t challenge_raw[16],
-                                    uint8_t pk_server[32])
+                                   uint8_t &state_index,
+                                   uint8_t pubkey[32],
+                                   uint8_t challenge_raw[16],
+                                   uint8_t pk_server[32])
 {
   ProtoFrame response = {};
   size_t dlen = strlen(domain);
-  if (dlen > 63) dlen = 63;
+  if (dlen > 63)
+    dlen = 63;
   if (!fpga_rpc(PROTO_CMD_PUF_FIND_STATE_BY_DOMAIN,
                 reinterpret_cast<const uint8_t *>(domain),
                 static_cast<uint16_t>(dlen), response, 2000))
@@ -411,9 +412,9 @@ bool fpga_puf_find_state_by_domain(const char *domain,
     return false;
   }
   state_index = response.payload[0];
-  memcpy(pubkey,        response.payload + 1,  32);
+  memcpy(pubkey, response.payload + 1, 32);
   memcpy(challenge_raw, response.payload + 33, 16);
-  memcpy(pk_server,     response.payload + 49, 32);
+  memcpy(pk_server, response.payload + 49, 32);
   return true;
 }
 
@@ -439,86 +440,111 @@ bool fpga_puf_mark_acknowledged(uint8_t state_index)
 
 typedef int64_t gf25519[16];
 
-static void gf_carry(gf25519 o) {
-    for (int i = 0; i < 16; i++) {
-        o[i] += (int64_t)65536;
-        int64_t c = o[i] >> 16;
-        if (i < 15) o[i + 1] += c - 1;
-        else        o[0]     += 38 * (c - 1);
-        o[i] -= c << 16;
-    }
+static void gf_carry(gf25519 o)
+{
+  for (int i = 0; i < 16; i++)
+  {
+    o[i] += (int64_t)65536;
+    int64_t c = o[i] >> 16;
+    if (i < 15)
+      o[i + 1] += c - 1;
+    else
+      o[0] += 38 * (c - 1);
+    o[i] -= c << 16;
+  }
 }
 
-static void gf_mul(gf25519 o, const gf25519 a, const gf25519 b) {
-    int64_t t[31] = {0};
+static void gf_mul(gf25519 o, const gf25519 a, const gf25519 b)
+{
+  int64_t t[31] = {0};
+  for (int i = 0; i < 16; i++)
+    for (int j = 0; j < 16; j++)
+      t[i + j] += a[i] * b[j];
+  for (int i = 0; i < 15; i++)
+    t[i] += 38 * t[i + 16];
+  for (int i = 0; i < 16; i++)
+    o[i] = t[i];
+  gf_carry(o);
+  gf_carry(o);
+}
+
+static void gf_inv(gf25519 o, const gf25519 a)
+{
+  // Fermat: a^(p-2) mod p, p-2 = 2^255-21, all bits set except bits 2 and 4
+  gf25519 c;
+  for (int i = 0; i < 16; i++)
+    c[i] = a[i];
+  for (int i = 253; i >= 0; i--)
+  {
+    gf_mul(c, c, c); // square
+    if (i != 2 && i != 4)
+      gf_mul(c, c, a);
+  }
+  for (int i = 0; i < 16; i++)
+    o[i] = c[i];
+}
+
+static void gf_from_bytes(gf25519 o, const uint8_t b[32])
+{
+  for (int i = 0; i < 16; i++)
+    o[i] = (int64_t)b[2 * i] | ((int64_t)b[2 * i + 1] << 8);
+}
+
+static void gf_to_bytes(uint8_t b[32], gf25519 n)
+{
+  gf25519 m, t;
+  for (int i = 0; i < 16; i++)
+    t[i] = n[i];
+  gf_carry(t);
+  gf_carry(t);
+  gf_carry(t);
+  // Subtract p twice to get canonical representative in [0, p)
+  for (int j = 0; j < 2; j++)
+  {
+    m[0] = t[0] - 0xffed;
+    for (int i = 1; i < 15; i++)
+    {
+      m[i] = t[i] - 0xffff - ((m[i - 1] >> 16) & 1);
+      m[i - 1] &= 0xffff;
+    }
+    m[15] = t[15] - 0x7fff - ((m[14] >> 16) & 1);
+    int64_t borrow = (m[15] >> 16) & 1; // 1 if t < p (keep t), 0 if t >= p (use m)
+    m[14] &= 0xffff;
+    // Conditionally swap t and m: swap when borrow=0 (t >= p, use reduced m)
+    int64_t mask = -(int64_t)(1 - borrow);
     for (int i = 0; i < 16; i++)
-        for (int j = 0; j < 16; j++)
-            t[i + j] += a[i] * b[j];
-    for (int i = 0; i < 15; i++)
-        t[i] += 38 * t[i + 16];
-    for (int i = 0; i < 16; i++) o[i] = t[i];
-    gf_carry(o);
-    gf_carry(o);
-}
-
-static void gf_inv(gf25519 o, const gf25519 a) {
-    // Fermat: a^(p-2) mod p, p-2 = 2^255-21, all bits set except bits 2 and 4
-    gf25519 c;
-    for (int i = 0; i < 16; i++) c[i] = a[i];
-    for (int i = 253; i >= 0; i--) {
-        gf_mul(c, c, c); // square
-        if (i != 2 && i != 4) gf_mul(c, c, a);
+    {
+      int64_t d = mask & (t[i] ^ m[i]);
+      t[i] ^= d;
+      m[i] ^= d;
     }
-    for (int i = 0; i < 16; i++) o[i] = c[i];
-}
-
-static void gf_from_bytes(gf25519 o, const uint8_t b[32]) {
-    for (int i = 0; i < 16; i++)
-        o[i] = (int64_t)b[2*i] | ((int64_t)b[2*i+1] << 8);
-}
-
-static void gf_to_bytes(uint8_t b[32], gf25519 n) {
-    gf25519 m, t;
-    for (int i = 0; i < 16; i++) t[i] = n[i];
-    gf_carry(t); gf_carry(t); gf_carry(t);
-    // Subtract p twice to get canonical representative in [0, p)
-    for (int j = 0; j < 2; j++) {
-        m[0] = t[0] - 0xffed;
-        for (int i = 1; i < 15; i++) {
-            m[i] = t[i] - 0xffff - ((m[i-1] >> 16) & 1);
-            m[i-1] &= 0xffff;
-        }
-        m[15] = t[15] - 0x7fff - ((m[14] >> 16) & 1);
-        int64_t borrow = (m[15] >> 16) & 1; // 1 if t < p (keep t), 0 if t >= p (use m)
-        m[14] &= 0xffff;
-        // Conditionally swap t and m: swap when borrow=0 (t >= p, use reduced m)
-        int64_t mask = -(int64_t)(1 - borrow);
-        for (int i = 0; i < 16; i++) {
-            int64_t d = mask & (t[i] ^ m[i]);
-            t[i] ^= d;
-            m[i] ^= d;
-        }
-    }
-    for (int i = 0; i < 16; i++) {
-        b[2*i]   = static_cast<uint8_t>(t[i] & 0xff);
-        b[2*i+1] = static_cast<uint8_t>(t[i] >> 8);
-    }
+  }
+  for (int i = 0; i < 16; i++)
+  {
+    b[2 * i] = static_cast<uint8_t>(t[i] & 0xff);
+    b[2 * i + 1] = static_cast<uint8_t>(t[i] >> 8);
+  }
 }
 
 // Convert Ed25519 public key to Curve25519 (X25519) public key.
 // Implements u = (1+y) / (1-y) mod p from the birational equivalence.
-static void ed25519_pk_to_x25519(uint8_t out[32], const uint8_t ed_pk[32]) {
-    uint8_t tmp[32];
-    memcpy(tmp, ed_pk, 32);
-    tmp[31] &= 0x7f; // clear sign bit to get y coordinate
-    gf25519 y, num, den;
-    gf_from_bytes(y, tmp);
-    for (int i = 0; i < 16; i++) { num[i] = y[i]; den[i] = -y[i]; }
-    num[0] += 1; // num = 1 + y
-    den[0] += 1; // den = 1 - y
-    gf_inv(den, den);
-    gf_mul(num, num, den); // u = (1+y) / (1-y)
-    gf_to_bytes(out, num);
+static void ed25519_pk_to_x25519(uint8_t out[32], const uint8_t ed_pk[32])
+{
+  uint8_t tmp[32];
+  memcpy(tmp, ed_pk, 32);
+  tmp[31] &= 0x7f; // clear sign bit to get y coordinate
+  gf25519 y, num, den;
+  gf_from_bytes(y, tmp);
+  for (int i = 0; i < 16; i++)
+  {
+    num[i] = y[i];
+    den[i] = -y[i];
+  }
+  num[0] += 1; // num = 1 + y
+  den[0] += 1; // den = 1 - y
+  gf_inv(den, den);
+  gf_mul(num, num, den); // u = (1+y) / (1-y)
+  gf_to_bytes(out, num);
 }
 
 bool fetch_ca_key_from_fpga()
@@ -683,12 +709,14 @@ bool fpga_puf_bch_query(uint8_t state_index, uint32_t challenge_id, uint8_t out[
 }
 
 static bool fpga_puf_bch_query_retry(uint8_t state_index, uint32_t challenge_id,
-                                      uint8_t out[32], int max_tries = 3)
+                                     uint8_t out[32], int max_tries = 3)
 {
-  for (int i = 0; i < max_tries; i++) {
+  for (int i = 0; i < max_tries; i++)
+  {
     if (fpga_puf_bch_query(state_index, challenge_id, out))
       return true;
-    if (i + 1 < max_tries) {
+    if (i + 1 < max_tries)
+    {
       Serial.print("[BCH] uncorrectable errors, retry ");
       Serial.print(i + 1);
       Serial.print("/");
@@ -728,9 +756,9 @@ bool fpga_puf_store_enrollment(uint8_t state_index,
   uint8_t req[81];
   ProtoFrame response = {};
   req[0] = state_index;
-  memcpy(req + 1,  pubkey,        32);
+  memcpy(req + 1, pubkey, 32);
   memcpy(req + 33, challenge_raw, 16);
-  memcpy(req + 49, pk_server,     32);
+  memcpy(req + 49, pk_server, 32);
   if (!fpga_rpc(PROTO_CMD_PUF_STORE_ENROLLMENT, req, sizeof(req), response, 2000))
   {
     Serial.println("Error: fpga_puf_store_enrollment timeout.");
@@ -777,9 +805,9 @@ bool fpga_puf_clear_states()
 }
 
 bool fpga_puf_get_slot_status(uint8_t state_index,
-                               uint8_t &is_init,
-                               uint8_t &acknowledged,
-                               char domain_buf[65])
+                              uint8_t &is_init,
+                              uint8_t &acknowledged,
+                              char domain_buf[65])
 {
   ProtoFrame response = {};
   if (!fpga_rpc(PROTO_CMD_PUF_GET_SLOT_STATUS, &state_index, 1, response, 2000))
@@ -797,15 +825,15 @@ bool fpga_puf_get_slot_status(uint8_t state_index,
     Serial.println("Error: fpga_puf_get_slot_status short response.");
     return false;
   }
-  is_init      = response.payload[0];
+  is_init = response.payload[0];
   acknowledged = response.payload[1];
-  size_t dlen  = response.len - 2;
-  if (dlen > 64) dlen = 64;
+  size_t dlen = response.len - 2;
+  if (dlen > 64)
+    dlen = 64;
   memcpy(domain_buf, response.payload + 2, dlen);
   domain_buf[dlen] = '\0';
   return true;
 }
-
 
 bool verify_cert_locally(const uint8_t *cert, size_t cert_len)
 {
@@ -1411,7 +1439,7 @@ void loop()
                 // Step 10: ECDH shared secret
                 uint8_t shared[32];
                 memcpy(shared, server_x25519_pk, 32);
-                Curve25519::dh2(shared, eph_priv);  // shared = X25519(eph_priv, server_x25519_pk)
+                Curve25519::dh2(shared, eph_priv); // shared = X25519(eph_priv, server_x25519_pk)
 
                 // Step 11: derive 32-byte encryption key = SHA256(shared || eph_pub)
                 SHA256 sha256;
@@ -1503,7 +1531,7 @@ void loop()
     }
     else if (command_str.startsWith("acknowledge "))
     {
-      int first_space  = command_str.indexOf(' ');
+      int first_space = command_str.indexOf(' ');
       int second_space = command_str.indexOf(' ', first_space + 1);
 
       if (second_space == -1)
@@ -1514,7 +1542,7 @@ void loop()
       else
       {
         String domain_str = command_str.substring(first_space + 1, second_space);
-        String sig_b64    = command_str.substring(second_space + 1);
+        String sig_b64 = command_str.substring(second_space + 1);
 
         uint8_t sig[64];
         size_t sig_len = 0;
@@ -1536,11 +1564,12 @@ void loop()
             // Build the 80-byte message the server signed:
             //   device_pubkey(32) || challenge_raw(16) || domain_padded(32)
             uint8_t ack_msg[80];
-            memcpy(ack_msg,      ack_pubkey,   32);
+            memcpy(ack_msg, ack_pubkey, 32);
             memcpy(ack_msg + 32, ack_challenge, 16);
             memset(ack_msg + 48, 0, 32);
             size_t dlen = domain_str.length();
-            if (dlen > 32) dlen = 32;
+            if (dlen > 32)
+              dlen = 32;
             memcpy(ack_msg + 48, domain_str.c_str(), dlen);
 
             if (!Ed25519::verify(sig, ack_pk_server, ack_msg, sizeof(ack_msg)))
@@ -1564,7 +1593,7 @@ void loop()
       // Phase 3: DongleReconf(Domain, ReconfPayload)
       // Command: reconf <domain> <payload_b64>
       // Payload: "reconf"(6)+C_old(16)+N(16)+C_new(16)+Server_Sig(64) = 118 bytes
-      int first_space  = command_str.indexOf(' ');
+      int first_space = command_str.indexOf(' ');
       int second_space = command_str.indexOf(' ', first_space + 1);
 
       if (second_space == -1)
@@ -1573,11 +1602,11 @@ void loop()
       }
       else
       {
-        String domain_str  = command_str.substring(first_space + 1, second_space);
+        String domain_str = command_str.substring(first_space + 1, second_space);
         String payload_b64 = command_str.substring(second_space + 1);
 
         uint8_t payload[RECONF_PAYLOAD_TOTAL_BYTES] = {0};
-        size_t  payload_len = 0;
+        size_t payload_len = 0;
 
         if (!decode_base64(payload_b64, payload, sizeof(payload), payload_len))
         {
@@ -1621,8 +1650,7 @@ void loop()
               {
                 // Extract C_old (bytes [6..21]) and C_new (bytes [38..53])
                 const uint8_t *c_old = payload + RECONF_PAYLOAD_PREFIX_BYTES;
-                const uint8_t *c_new = payload + RECONF_PAYLOAD_PREFIX_BYTES
-                                       + ENROLL_CHALLENGE_BYTES + ENROLL_NONCE_BYTES;
+                const uint8_t *c_new = payload + RECONF_PAYLOAD_PREFIX_BYTES + ENROLL_CHALLENGE_BYTES + ENROLL_NONCE_BYTES;
 
                 uint32_t challenge_id_old =
                     static_cast<uint32_t>(c_old[0]) | (static_cast<uint32_t>(c_old[1]) << 8) |
@@ -1652,7 +1680,7 @@ void loop()
                     // Step 3: BCH enroll new key pair under S^{i+1}
                     uint8_t sk_new[32] = {0};
                     if (!fpga_puf_bch_enroll(state_index, challenge_id_new,
-                                              ENROLL_PUF_SAMPLES, sk_new))
+                                             ENROLL_PUF_SAMPLES, sk_new))
                     {
                       memset(sk_old, 0, sizeof(sk_old));
                       Serial.println("RECONF_ERROR: BCH enroll for new key failed.");
@@ -1664,7 +1692,7 @@ void loop()
 
                       // Step 4: sign { PK_new(32) || ReconfPayload(118) } with SK_old
                       uint8_t to_sign[32 + RECONF_PAYLOAD_TOTAL_BYTES];
-                      memcpy(to_sign,      pk_new,  32);
+                      memcpy(to_sign, pk_new, 32);
                       memcpy(to_sign + 32, payload, RECONF_PAYLOAD_TOTAL_BYTES);
                       uint8_t device_sig[64];
                       Ed25519::sign(device_sig, sk_old, stored_pubkey,
@@ -1695,8 +1723,8 @@ void loop()
                       memset(eph_priv, 0, sizeof(eph_priv));
 
                       uint8_t plaintext[RECONF_TOKEN_PLAINTEXT_BYTES];
-                      memcpy(plaintext,       pk_new,     32);
-                      memcpy(plaintext + 32,  payload,    RECONF_PAYLOAD_TOTAL_BYTES);
+                      memcpy(plaintext, pk_new, 32);
+                      memcpy(plaintext + 32, payload, RECONF_PAYLOAD_TOTAL_BYTES);
                       memcpy(plaintext + 32 + RECONF_PAYLOAD_TOTAL_BYTES, device_sig, 64);
 
                       uint8_t enc_nonce[12];
@@ -1713,7 +1741,7 @@ void loop()
                       memset(plaintext, 0, sizeof(plaintext));
 
                       // Step 6: persist new enrollment to FPGA SD
-                      if (!fpga_puf_set_domain(state_index, domain_str.c_str())          ||
+                      if (!fpga_puf_set_domain(state_index, domain_str.c_str()) ||
                           !fpga_puf_store_enrollment(state_index, pk_new, c_new, pk_server) ||
                           !fpga_puf_save_states())
                       {
@@ -1747,7 +1775,7 @@ void loop()
       // Command: reconf_ack <domain> <sig_b64>
       // Ack message = PK_{i+1}(32) || C^{i+1}_Session(16) || domain_padded(32) = 80 bytes
       // (same binary format as Phase 1 'acknowledge')
-      int first_space  = command_str.indexOf(' ');
+      int first_space = command_str.indexOf(' ');
       int second_space = command_str.indexOf(' ', first_space + 1);
 
       if (second_space == -1)
@@ -1757,10 +1785,10 @@ void loop()
       else
       {
         String domain_str = command_str.substring(first_space + 1, second_space);
-        String sig_b64    = command_str.substring(second_space + 1);
+        String sig_b64 = command_str.substring(second_space + 1);
 
         uint8_t sig[64];
-        size_t  sig_len = 0;
+        size_t sig_len = 0;
         if (!decode_base64(sig_b64, sig, sizeof(sig), sig_len) || sig_len != 64)
         {
           Serial.println("RECONF_ACK_BAD: sig_b64 must decode to 64 bytes.");
@@ -1778,11 +1806,12 @@ void loop()
           {
             // Ack message: PK_{i+1}(32) || C^{i+1}_Session(16) || domain_padded(32)
             uint8_t ack_msg[80];
-            memcpy(ack_msg,      ack_pubkey,    32);
+            memcpy(ack_msg, ack_pubkey, 32);
             memcpy(ack_msg + 32, ack_challenge, 16);
             memset(ack_msg + 48, 0, 32);
             size_t dlen = domain_str.length();
-            if (dlen > 32) dlen = 32;
+            if (dlen > 32)
+              dlen = 32;
             memcpy(ack_msg + 48, domain_str.c_str(), dlen);
 
             if (!Ed25519::verify(sig, ack_pk_server, ack_msg, sizeof(ack_msg)))
@@ -1806,7 +1835,7 @@ void loop()
       // Phase 2 non-sensitive: SignPayload(Domain, SignaturePayload) — no touchscreen approval.
       // Command: sign_payload <domain> <payload_b64>
       // Payload: "sign"(4) + C_Session(16) + N(16) + Server_Sig(64) = 100 bytes
-      int first_space  = command_str.indexOf(' ');
+      int first_space = command_str.indexOf(' ');
       int second_space = command_str.indexOf(' ', first_space + 1);
 
       if (second_space == -1)
@@ -1816,11 +1845,11 @@ void loop()
       }
       else
       {
-        String domain_str  = command_str.substring(first_space + 1, second_space);
+        String domain_str = command_str.substring(first_space + 1, second_space);
         String payload_b64 = command_str.substring(second_space + 1);
 
         uint8_t payload[SIGN_PAYLOAD_TOTAL_BYTES] = {0};
-        size_t  payload_len = 0;
+        size_t payload_len = 0;
 
         if (!decode_base64(payload_b64, payload, sizeof(payload), payload_len))
         {
@@ -1889,7 +1918,7 @@ void loop()
       // Command: sign_sensitive <domain> <payload_b64>
       // Payload decodes to SENSITIVE_PAYLOAD_TOTAL_BYTES (137 bytes):
       //   "sensitive"(9) + C_Session(16) + N(16) + Description(32) + Server_Sig(64)
-      int first_space  = command_str.indexOf(' ');
+      int first_space = command_str.indexOf(' ');
       int second_space = command_str.indexOf(' ', first_space + 1);
 
       if (second_space == -1)
@@ -1899,11 +1928,11 @@ void loop()
       }
       else
       {
-        String domain_str   = command_str.substring(first_space + 1, second_space);
-        String payload_b64  = command_str.substring(second_space + 1);
+        String domain_str = command_str.substring(first_space + 1, second_space);
+        String payload_b64 = command_str.substring(second_space + 1);
 
         uint8_t payload[SENSITIVE_PAYLOAD_TOTAL_BYTES] = {0};
-        size_t  payload_len = 0;
+        size_t payload_len = 0;
 
         if (!decode_base64(payload_b64, payload, sizeof(payload), payload_len))
         {
@@ -1951,8 +1980,8 @@ void loop()
               char description[SENSITIVE_DESCRIPTION_BYTES + 1] = {0};
               memcpy(description,
                      payload + SENSITIVE_PAYLOAD_PREFIX_BYTES +
-                               SENSITIVE_CHALLENGE_BYTES +
-                               SENSITIVE_NONCE_BYTES,
+                         SENSITIVE_CHALLENGE_BYTES +
+                         SENSITIVE_NONCE_BYTES,
                      SENSITIVE_DESCRIPTION_BYTES);
               description[SENSITIVE_DESCRIPTION_BYTES] = '\0';
 
@@ -2013,7 +2042,8 @@ void loop()
           continue;
         }
         Serial.print("  ");
-        if (i < 10) Serial.print(' ');
+        if (i < 10)
+          Serial.print(' ');
         Serial.print(i);
         Serial.print(" | ");
         if (!is_init)
@@ -2024,7 +2054,8 @@ void loop()
         {
           size_t dlen = strlen(domain);
           Serial.print(domain);
-          for (size_t j = dlen; j < 32; j++) Serial.print(' ');
+          for (size_t j = dlen; j < 32; j++)
+            Serial.print(' ');
           Serial.print(" | ");
           Serial.println(acked ? "ACKNOWLEDGED" : "PENDING");
         }
