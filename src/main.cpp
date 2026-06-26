@@ -2061,6 +2061,34 @@ void loop()
         }
       }
     }
+    else if (command_str.startsWith("trng_dump"))
+    {
+      int n_bytes = 1024;
+      int space = command_str.indexOf(' ');
+      if (space != -1)
+        n_bytes = command_str.substring(space + 1).toInt();
+      if (n_bytes < 1 || n_bytes > 1000000)
+        n_bytes = 1024;
+
+      Serial.print("TRNG_START ");
+      Serial.println(n_bytes);
+
+      int generated = 0;
+      while (generated < n_bytes)
+      {
+        uint32_t r = generateRandomSeed();
+        int chunk = (n_bytes - generated < 4) ? (n_bytes - generated) : 4;
+        for (int j = 0; j < chunk; j++)
+        {
+          uint8_t b = (r >> (j * 8)) & 0xFF;
+          if (b < 0x10) Serial.print("0");
+          Serial.print(b, HEX);
+        }
+        generated += chunk;
+      }
+      Serial.println();
+      Serial.println("TRNG_END");
+    }
     else if (command_str.length() > 0)
     {
       Serial.print("Unknown command: '");
