@@ -1340,6 +1340,7 @@ void loop()
         }
         else if (verify_cert_locally(cert, cert_len))
         {
+          unsigned long t_total_start = millis();
           Serial.println("CERT_OK");
           print_domain_from_cert(cert);
           print_server_pubkey_from_cert(cert);
@@ -1353,6 +1354,7 @@ void loop()
             for (size_t i = 0; i < CERT_DOMAIN_BYTES && cert[i] != 0; i++)
               domain[i] = static_cast<char>(cert[i]);
 
+            unsigned long t_ui_start = millis();
             if (!touch_kb_confirm_login(domain))
             {
               Serial.println("ENROLL_REJECTED");
@@ -1364,6 +1366,7 @@ void loop()
               if (touch_kb_prompt_credentials(username, sizeof(username),
                                               password, sizeof(password)))
               {
+                unsigned long t_ui_end = millis();
                 // Step 1: reuse existing slot for this domain, or allocate a free one
                 uint8_t state_index = 0;
                 {
@@ -1512,6 +1515,11 @@ void loop()
                 print_hex_bytes(tag, 16);
                 Serial.println();
 
+                unsigned long t_total_end = millis();
+                unsigned long computation_ms = (t_total_end - t_total_start) - (t_ui_end - t_ui_start);
+                Serial.print("ENROLL_COMPUTATION_MS: ");
+                Serial.println(computation_ms);
+
                 Serial.println("ENROLL_COMPLETE");
               }
               else
@@ -1541,6 +1549,7 @@ void loop()
       }
       else
       {
+        unsigned long t_ack_start = millis();
         String domain_str = command_str.substring(first_space + 1, second_space);
         String sig_b64 = command_str.substring(second_space + 1);
 
@@ -1582,6 +1591,8 @@ void loop()
             }
             else
             {
+              Serial.print("ACK_COMPUTATION_MS: ");
+              Serial.println(millis() - t_ack_start);
               Serial.println("ACK_OK");
             }
           }
