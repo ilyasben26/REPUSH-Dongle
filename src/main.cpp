@@ -1878,6 +1878,7 @@ void loop()
         }
         else
         {
+          unsigned long t_sign_start = millis();
           uint8_t state_index = 0;
           uint8_t stored_pubkey[32], stored_challenge[16], pk_server[32];
           if (!fpga_puf_find_state_by_domain(domain_str.c_str(), state_index,
@@ -1916,6 +1917,8 @@ void loop()
                 Serial.print("DEVICE_SIG: ");
                 print_hex_bytes(device_sig, 64);
                 Serial.println();
+                Serial.print("SIGN_COMPUTATION_MS: ");
+                Serial.println(millis() - t_sign_start);
                 Serial.println("SIGN_PAYLOAD_COMPLETE");
               }
             }
@@ -2092,7 +2095,8 @@ void loop()
         for (int j = 0; j < chunk; j++)
         {
           uint8_t b = (r >> (j * 8)) & 0xFF;
-          if (b < 0x10) Serial.print("0");
+          if (b < 0x10)
+            Serial.print("0");
           Serial.print(b, HEX);
         }
         generated += chunk;

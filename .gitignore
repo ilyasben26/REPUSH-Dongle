@@ -6,3 +6,4 @@
 .venv/
 examples/
 __pycache__/
+docs/
