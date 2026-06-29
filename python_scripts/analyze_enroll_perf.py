@@ -3,8 +3,9 @@ import statistics
 import sys
 from pathlib import Path
 
-ENROLL_CSV = Path(__file__).parent / "enroll_perf.csv"
-SIGN_CSV   = Path(__file__).parent / "sign_perf.csv"
+ENROLL_CSV    = Path(__file__).parent / "enroll_perf.csv"
+SIGN_CSV      = Path(__file__).parent / "sign_perf.csv"
+SENS_SIGN_CSV = Path(__file__).parent / "sens_sign_perf.csv"
 
 ENROLL_COLUMNS = {
     "dongle_enroll_ms":        "Dongle enroll (ms)",
@@ -14,6 +15,11 @@ ENROLL_COLUMNS = {
 
 SIGN_COLUMNS = {
     "roundtrip_s":      "Round trip (s)",
+    "dongle_sign_ms":   "Dongle sign (ms)",
+    "server_verify_ms": "Server verify (ms)",
+}
+
+SENS_SIGN_COLUMNS = {
     "dongle_sign_ms":   "Dongle sign (ms)",
     "server_verify_ms": "Server verify (ms)",
 }
@@ -56,11 +62,13 @@ def print_table(title: str, data: dict[str, list[float]], columns: dict) -> None
 
 
 def main() -> None:
-    enroll_data = load(ENROLL_CSV, ENROLL_COLUMNS)
-    sign_data   = load(SIGN_CSV,   SIGN_COLUMNS)
+    enroll_data    = load(ENROLL_CSV,    ENROLL_COLUMNS)
+    sign_data      = load(SIGN_CSV,      SIGN_COLUMNS)
+    sens_sign_data = load(SENS_SIGN_CSV, SENS_SIGN_COLUMNS)
 
     print_table("=== Phase 1: Enrollment ===", enroll_data, ENROLL_COLUMNS)
     print_table("=== Phase 2: Non-sensitive signing ===", sign_data, SIGN_COLUMNS)
+    print_table("=== Phase 2: Sensitive signing ===", sens_sign_data, SENS_SIGN_COLUMNS)
 
 
 if __name__ == "__main__":

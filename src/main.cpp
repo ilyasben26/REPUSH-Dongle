@@ -1964,6 +1964,7 @@ void loop()
         }
         else
         {
+          unsigned long t_sens_start = millis();
           // Look up the enrolled state for this domain (provides stored pubkey + pk_server)
           uint8_t state_index = 0;
           uint8_t stored_pubkey[32], stored_challenge[16], pk_server[32];
@@ -2000,12 +2001,14 @@ void loop()
               description[SENSITIVE_DESCRIPTION_BYTES] = '\0';
 
               // Show sensitive request on touchscreen; require explicit APPROVE
+              unsigned long t_ui_start = millis();
               if (!touch_kb_confirm_sensitive(domain_str.c_str(), description))
               {
                 Serial.println("SIGN_REJECTED");
               }
               else
               {
+                unsigned long t_ui_end = millis();
                 uint8_t device_privkey[32] = {0};
                 if (!fpga_puf_bch_query_retry(state_index, challenge_id, device_privkey))
                 {
@@ -2025,6 +2028,9 @@ void loop()
                   Serial.print("DEVICE_SIG: ");
                   print_hex_bytes(device_sig, 64);
                   Serial.println();
+                  unsigned long t_sens_end = millis();
+                  Serial.print("SENS_COMPUTATION_MS: ");
+                  Serial.println((t_sens_end - t_sens_start) - (t_ui_end - t_ui_start));
                   Serial.println("SIGN_COMPLETE");
                 }
               }
