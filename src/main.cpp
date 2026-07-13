@@ -1644,6 +1644,7 @@ void loop()
           }
           else
           {
+            unsigned long t_reconf_start = millis();
             // Verify server signature on the 54-byte message portion
             const uint8_t *server_sig = payload + RECONF_PAYLOAD_MSG_BYTES;
             if (!Ed25519::verify(server_sig, pk_server, payload, RECONF_PAYLOAD_MSG_BYTES))
@@ -1653,12 +1654,14 @@ void loop()
             else
             {
               // Show session renewal prompt — user must explicitly approve
+              unsigned long t_ui_start = millis();
               if (!touch_kb_confirm_reconf(domain_str.c_str()))
               {
                 Serial.println("RECONF_REJECTED");
               }
               else
               {
+                unsigned long t_ui_end = millis();
                 // Extract C_old (bytes [6..21]) and C_new (bytes [38..53])
                 const uint8_t *c_old = payload + RECONF_PAYLOAD_PREFIX_BYTES;
                 const uint8_t *c_new = payload + RECONF_PAYLOAD_PREFIX_BYTES + ENROLL_CHALLENGE_BYTES + ENROLL_NONCE_BYTES;
@@ -1769,6 +1772,8 @@ void loop()
                         print_hex_bytes(ciphertext, sizeof(ciphertext));
                         print_hex_bytes(tag, 16);
                         Serial.println();
+                        Serial.print("RECONF_COMPUTATION_MS: ");
+                        Serial.println((millis() - t_reconf_start) - (t_ui_end - t_ui_start));
                         Serial.println("RECONF_COMPLETE");
                       }
                     }
@@ -1786,6 +1791,7 @@ void loop()
       // Command: reconf_ack <domain> <sig_b64>
       // Ack message = PK_{i+1}(32) || C^{i+1}_Session(16) || domain_padded(32) = 80 bytes
       // (same binary format as Phase 1 'acknowledge')
+      unsigned long t_reconf_ack_start = millis();
       int first_space = command_str.indexOf(' ');
       int second_space = command_str.indexOf(' ', first_space + 1);
 
@@ -1835,6 +1841,8 @@ void loop()
             }
             else
             {
+              Serial.print("RECONF_ACK_COMPUTATION_MS: ");
+              Serial.println(millis() - t_reconf_ack_start);
               Serial.println("RECONF_ACK_OK");
             }
           }
@@ -1889,12 +1897,17 @@ void loop()
           else
           {
             const uint8_t *server_sig = payload + SIGN_PAYLOAD_MSG_BYTES;
-            if (!Ed25519::verify(server_sig, pk_server, payload, SIGN_PAYLOAD_MSG_BYTES))
+            unsigned long t_verify_start = millis();
+            bool verify_ok = Ed25519::verify(server_sig, pk_server, payload, SIGN_PAYLOAD_MSG_BYTES);
+            unsigned long t_verify_ms = millis() - t_verify_start;
+            if (!verify_ok)
             {
               Serial.println("SIGN_PAYLOAD_ERROR: server signature verification failed.");
             }
             else
             {
+              Serial.print("SIGN_VERIFY_MS: ");
+              Serial.println(t_verify_ms);
               const uint8_t *c_session = payload + SIGN_PAYLOAD_PREFIX_BYTES;
               uint32_t challenge_id =
                   static_cast<uint32_t>(c_session[0]) |
@@ -1910,13 +1923,17 @@ void loop()
               else
               {
                 uint8_t device_sig[64];
+                unsigned long t_devsign_start = millis();
                 Ed25519::sign(device_sig, device_privkey, stored_pubkey,
                               payload, SIGN_PAYLOAD_TOTAL_BYTES);
+                unsigned long t_devsign_ms = millis() - t_devsign_start;
                 memset(device_privkey, 0, sizeof(device_privkey));
 
                 Serial.print("DEVICE_SIG: ");
                 print_hex_bytes(device_sig, 64);
                 Serial.println();
+                Serial.print("SIGN_SIGN_MS: ");
+                Serial.println(t_devsign_ms);
                 Serial.print("SIGN_COMPUTATION_MS: ");
                 Serial.println(millis() - t_sign_start);
                 Serial.println("SIGN_PAYLOAD_COMPLETE");

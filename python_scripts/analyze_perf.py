@@ -6,6 +6,7 @@ from pathlib import Path
 ENROLL_CSV    = Path(__file__).parent / "enroll_perf.csv"
 SIGN_CSV      = Path(__file__).parent / "sign_perf.csv"
 SENS_SIGN_CSV = Path(__file__).parent / "sens_sign_perf.csv"
+RECONF_CSV    = Path(__file__).parent / "reconf_perf.csv"
 
 ENROLL_COLUMNS = {
     "dongle_enroll_ms":        "Dongle enroll (ms)",
@@ -22,6 +23,12 @@ SIGN_COLUMNS = {
 SENS_SIGN_COLUMNS = {
     "dongle_sign_ms":   "Dongle sign (ms)",
     "server_verify_ms": "Server verify (ms)",
+}
+
+RECONF_COLUMNS = {
+    "dongle_reconf_ms":        "Dongle reconf (ms)",
+    "server_reconf_crypto_ms": "Server verify (ms)",
+    "dongle_ack_ms":           "Dongle ack (ms)",
 }
 
 
@@ -65,10 +72,12 @@ def main() -> None:
     enroll_data    = load(ENROLL_CSV,    ENROLL_COLUMNS)
     sign_data      = load(SIGN_CSV,      SIGN_COLUMNS)
     sens_sign_data = load(SENS_SIGN_CSV, SENS_SIGN_COLUMNS)
+    reconf_data    = load(RECONF_CSV,    RECONF_COLUMNS)
 
     print_table("=== Phase 1: Enrollment ===", enroll_data, ENROLL_COLUMNS)
     print_table("=== Phase 2: Non-sensitive signing ===", sign_data, SIGN_COLUMNS)
     print_table("=== Phase 2: Sensitive signing ===", sens_sign_data, SENS_SIGN_COLUMNS)
+    print_table("=== Phase 3: Reconfiguration ===", reconf_data, RECONF_COLUMNS)
 
 
 if __name__ == "__main__":
