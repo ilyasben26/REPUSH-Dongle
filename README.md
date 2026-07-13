@@ -57,26 +57,3 @@ each phase. The actual readings were gathered from the user interface by simply 
 ```shell
 python python_scripts/analyze_perf.py
 ```
-
-### BCH fuzzy-commitment test
-
-`test_bch.py` connects to the FPGA's debug UART and drives a BCH
-enroll-then-query loop to verify the PUF response can be reliably
-error-corrected back to the same seed, make sure that the FPGA has been flashed accordingly first:
-
-```shell
-python python_scripts/test_bch.py --port /dev/tty.usbserial-XXXX
-```
-
-Before running it, initialize the FPGA over the same debug UART:
-
-```
-si          # init SD card
-ps          # scan and save PUF challenges
-rs 0 12345  # init LR-PUF state slot 0 with some seed
-```
-
-Optional flags: `--state` (LR-PUF state slot, default `0`), `--challenge`
-(challenge ID, default `1`), `--queries` (number of query iterations, default
-`20`), `--debug` (print raw UART traffic).
-
