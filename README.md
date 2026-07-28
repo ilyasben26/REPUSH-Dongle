@@ -23,12 +23,18 @@ REPUSH-Dongle/
 
 ---
 
-## How to run everything:
-Read the readme file and follow the instructions for each of the repos in this order:
-1. REPUSH-FPGA
-2. REPUSH-Dongle
-3. REPUSH-DOMAN
-4. REPUSH-Server
+## How to test:
+Since the submitted dongle is already flashed, the simplest way to test REPUSH is to just run DOMAN along with the local server by following the instructions on these two repositories in order:
+1. https://github.com/ilyasben26/REPUSH-DOMAN 
+2. https://github.com/ilyasben26/REPUSH-Server 
+
+
+## How to flash and run everything:
+If you want to flash the FPGA and Arduino again. Read the remainder of this readme file first and the follow the instructions for each of the repos in this order:
+1. REPUSH-Dongle: https://github.com/ilyasben26/REPUSH-Dongle
+2. REPUSH-FPGA: https://github.com/ilyasben26/REPUSH-FPGA
+3. REPUSH-DOMAN: https://github.com/ilyasben26/REPUSH-DOMAN
+4. REPUSH-Server: https://github.com/ilyasben26/REPUSH-Server
   
 
 ## Building and Flashing
