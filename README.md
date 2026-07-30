@@ -41,8 +41,12 @@ If you want to flash the FPGA and Arduino again. Read the remainder of this read
 - Install PlatformIO CLI: https://docs.platformio.org/en/latest/core/installation/index.html
 
 ```bash
-# Make sure to select the correct device for the upload port:
-pio run -e nano_33_iot -t upload --upload-port /dev/cu.usbmodem11201
+# Make sure to select the correct device for the upload port. Port name can be found by running `ls /dev`
+pio run -e nano_33_iot -t upload --upload-port /dev/cu.usbmodem11201 # macos and linux
+
+# On Windows, to find the name of the port, run `python -m serial.tools.list_ports -v`
+pio run -e nano_33_iot -t upload --upload-port COM5
+
 ```
 
 ## Evaluation
